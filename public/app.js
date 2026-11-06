@@ -1,0 +1,991 @@
+'use strict';
+
+/* ==================================================================
+ *  BIST100 Analyst - istemci mantigi
+ *  - Anlik fiyat listesi (alfabetik)
+ *  - Genisleyen satirlarda klasik mum grafigi (5y/1y/6mo/1mo/bugun)
+ *  - Bugunun trendleri (haftalik en hareketliler)
+ *  - Sag panelde son 7 gunun haberleri
+ *  - Favoriler (localStorage)
+ * ================================================================== */
+
+const RANGES = [
+  { key: '5y', label: '5 Yil' },
+  { key: '1y', label: '1 Yil' },
+  { key: '6mo', label: '6 Ay' },
+  { key: '1mo', label: '1 Ay' },
+  { key: '1d', label: 'Bugun' }
+];
+
+const FAV_KEY = 'bist100_favorites';
+
+const state = {
+  items: [],
+  bySymbol: {},
+  favorites: new Set(JSON.parse(localStorage.getItem(FAV_KEY) || '[]')),
+  openSymbol: null,
+  range: '1y',
+  favOnly: false,
+  search: '',
+  chartCache: new Map(),
+  updatedAt: null
+};
+
+/* ------------------------- bicimlendirme ------------------------- */
+
+const nf2 = new Intl.NumberFormat('tr-TR', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2
+});
+const nf0 = new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 0 });
+
+function fmtPrice(v) {
+  if (v == null || !isFinite(v)) return '—';
+  return nf2.format(v);
+}
+function fmtPct(v) {
+  if (v == null || !isFinite(v)) return '—';
+  const s = (v > 0 ? '+' : '') + nf2.format(v) + '%';
+  return s;
+}
+function fmtSigned(v) {
+  if (v == null || !isFinite(v)) return '—';
+  return (v > 0 ? '+' : '') + nf2.format(v);
+}
+function fmtVolume(v) {
+  if (v == null) return '—';
+  if (v >= 1e9) return (v / 1e9).toFixed(2) + ' mr';
+  if (v >= 1e6) return (v / 1e6).toFixed(2) + ' mn';
+  if (v >= 1e3) return (v / 1e3).toFixed(1) + ' bn';
+  return String(v);
+}
+function fmtDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  return d.toLocaleDateString('tr-TR', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric'
+  });
+}
+function fmtRelative(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const diff = Date.now() - d.getTime();
+  const h = Math.floor(diff / 3600000);
+  if (h < 1) return 'az once';
+  if (h < 24) return h + ' saat once';
+  const day = Math.floor(h / 24);
+  return day + ' gun once';
+}
+
+function cls(v) {
+  if (v == null || !isFinite(v) || v === 0) return 'flat';
+  return v > 0 ? 'up' : 'down';
+}
+
+/* ------------------------- favoriler ------------------------- */
+
+function saveFavs() {
+  localStorage.setItem(FAV_KEY, JSON.stringify([...state.favorites]));
+  updateFavCount();
+}
+function isFav(sym) {
+  return state.favorites.has(sym);
+}
+function toggleFav(sym) {
+  if (state.favorites.has(sym)) state.favorites.delete(sym);
+  else state.favorites.add(sym);
+  saveFavs();
+  const star = document.querySelector(
+    '.stock-row[data-symbol="' + sym + '"] .fav-star'
+  );
+  if (star) star.classList.toggle('on', isFav(sym));
+  if (state.favOnly) applyFilter();
+}
+function updateFavCount() {
+  const el = document.getElementById('favCount');
+  if (el) el.textContent = String(state.favorites.size);
+}
+
+/* ------------------------- yardimcilar ------------------------- */
+
+async function api(path) {
+  const res = await fetch(path, { headers: { Accept: 'application/json' } });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = (await res.json()).detail || '';
+    } catch (e) {}
+    throw new Error('API ' + res.status + (detail ? ': ' + detail : ''));
+  }
+  return res.json();
+}
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+/* ==================================================================
+ *  Klasik mum grafigi (canvas, bagimliliksiz)
+ * ================================================================== */
+
+const UP = '#1fd286';
+const DOWN = '#ff5c6c';
+const GRID = '#232c3a';
+const TEXT = '#8a97a8';
+
+class CandleChart {
+  constructor(container) {
+    this.container = container;
+    this.candles = [];
+    this.currency = 'TRY';
+    this.hover = -1;
+
+    this.canvas = el('canvas');
+    container.appendChild(this.canvas);
+    this.ctx = this.canvas.getContext('2d');
+
+    this.tooltip = el('div', 'chart-tooltip');
+    this.tooltip.style.display = 'none';
+    container.appendChild(this.tooltip);
+
+    this._onMove = this._onMove.bind(this);
+    this._onLeave = this._onLeave.bind(this);
+    this.canvas.addEventListener('mousemove', this._onMove);
+    this.canvas.addEventListener('mouseleave', this._onLeave);
+
+    if (window.ResizeObserver) {
+      this._ro = new ResizeObserver(() => this.draw());
+      this._ro.observe(container);
+    }
+    window.addEventListener('resize', () => this.draw());
+  }
+
+  destroy() {
+    if (this._ro) this._ro.disconnect();
+    this.canvas.removeEventListener('mousemove', this._onMove);
+    this.canvas.removeEventListener('mouseleave', this._onLeave);
+    this.container.innerHTML = '';
+  }
+
+  setData(payload) {
+    this.candles = (payload && payload.candles) || [];
+    this.currency = (payload && payload.currency) || 'TRY';
+    this.hover = -1;
+    this.draw();
+  }
+
+  _layout() {
+    const w = this.container.clientWidth || 600;
+    const h = this.container.clientHeight || 300;
+    const dpr = window.devicePixelRatio || 1;
+
+    this.canvas.width = Math.round(w * dpr);
+    this.canvas.height = Math.round(h * dpr);
+    this.canvas.style.width = w + 'px';
+    this.canvas.style.height = h + 'px';
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const padR = 58;
+    const padL = 8;
+    const padT = 12;
+    const padB = 24;
+    const priceH = Math.max(40, (h - padT - padB) * 0.76);
+    const volTop = padT + priceH + 8;
+    const volH = Math.max(20, h - padB - volTop - 6);
+
+    return { w, h, padL, padR, padT, padB, priceH, volTop, volH };
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    const L = this._layout();
+    const { w, h, padL, padR, padT, priceH, volTop, volH } = L;
+
+    ctx.clearRect(0, 0, w, h);
+
+    const n = this.candles.length;
+    if (!n) {
+      ctx.fillStyle = TEXT;
+      ctx.font = '13px Segoe UI, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Veri yok', w / 2, h / 2);
+      return;
+    }
+
+    const plotL = padL;
+    const plotR = w - padR;
+    const plotW = plotR - plotL;
+
+    let min = Infinity;
+    let max = -Infinity;
+    let vmax = 0;
+    for (const c of this.candles) {
+      if (c.l < min) min = c.l;
+      if (c.h > max) max = c.h;
+      if (c.v > vmax) vmax = c.v;
+    }
+    if (min === max) {
+      min -= 1;
+      max += 1;
+    }
+    const pad = (max - min) * 0.06;
+    min -= pad;
+    max += pad;
+
+    const yOf = (v) => padT + priceH - ((v - min) / (max - min)) * priceH;
+    const vyOf = (v) => volTop + volH - (vmax ? (v / vmax) * volH : 0);
+
+    const step = plotW / n;
+    const cw = Math.max(1, Math.min(step * 0.7, 18));
+
+    // Yatay izgara + fiyat etiketleri (sagda)
+    ctx.strokeStyle = GRID;
+    ctx.fillStyle = TEXT;
+    ctx.lineWidth = 1;
+    ctx.font = '11px Segoe UI, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    const gridLines = 5;
+    for (let i = 0; i <= gridLines; i++) {
+      const val = max - ((max - min) / gridLines) * i;
+      const y = Math.round(yOf(val)) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(plotL, y);
+      ctx.lineTo(plotR, y);
+      ctx.stroke();
+      ctx.fillText(fmtPrice(val), plotR + 6, y);
+    }
+
+    // Mumlar + hacim
+    for (let i = 0; i < n; i++) {
+      const c = this.candles[i];
+      const cx = plotL + i * step + step / 2;
+      const up = c.c >= c.o;
+      const color = up ? UP : DOWN;
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+
+      ctx.beginPath();
+      ctx.moveTo(cx, yOf(c.h));
+      ctx.lineTo(cx, yOf(c.l));
+      ctx.stroke();
+
+      const yo = yOf(c.o);
+      const yc = yOf(c.c);
+      const top = Math.min(yo, yc);
+      const bh = Math.max(1, Math.abs(yc - yo));
+      ctx.fillRect(cx - cw / 2, top, cw, bh);
+
+      if (vmax > 0) {
+        const vh = (c.v / vmax) * volH;
+        ctx.globalAlpha = 0.45;
+        ctx.fillRect(cx - cw / 2, volTop + volH - vh, cw, vh);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // Tarih etiketleri (altta)
+    ctx.fillStyle = TEXT;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    const labelCount = Math.max(2, Math.min(6, Math.floor(plotW / 90)));
+    for (let i = 0; i <= labelCount; i++) {
+      const idx = Math.round((n - 1) * (i / labelCount));
+      const c = this.candles[idx];
+      const cx = plotL + idx * step + step / 2;
+      const d = new Date(c.t);
+      const lbl =
+        n > 120
+          ? d.toLocaleDateString('tr-TR', { month: 'short', year: '2-digit' })
+          : d.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit' });
+      ctx.fillText(
+        lbl,
+        Math.min(Math.max(cx, padL + 18), plotR - 12),
+        h - padB + 6
+      );
+    }
+
+    // Crosshair
+    if (this.hover >= 0 && this.hover < n) {
+      const c = this.candles[this.hover];
+      const cx = plotL + this.hover * step + step / 2;
+      ctx.strokeStyle = '#5a6b85';
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(cx, padT);
+      ctx.lineTo(cx, volTop + volH);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const yc = yOf(c.c);
+      ctx.beginPath();
+      ctx.moveTo(plotL, yc);
+      ctx.lineTo(plotR, yc);
+      ctx.stroke();
+
+      const pct = c.o ? ((c.c - c.o) / c.o) * 100 : 0;
+      const d = new Date(c.t);
+      this.tooltip.innerHTML =
+        '<div class="tt-date">' + fmtDate(d.toISOString()) + '</div>' +
+        'A: ' + fmtPrice(c.o) + '  Y: ' + fmtPrice(c.h) + '<br>' +
+        'D: ' + fmtPrice(c.l) + '  K: ' + fmtPrice(c.c) + '<br>' +
+        '<span class="' + (pct >= 0 ? 'up' : 'down') + '">' +
+        (pct >= 0 ? '+' : '') + nf2.format(pct) + '%</span>  ·  Hacim ' +
+        fmtVolume(c.v);
+      this.tooltip.style.display = 'block';
+      const tw = this.tooltip.offsetWidth;
+      let tx = cx + 14;
+      if (tx + tw > w) tx = cx - tw - 14;
+      this.tooltip.style.left = Math.max(4, tx) + 'px';
+      this.tooltip.style.top = Math.max(4, padT + 6) + 'px';
+    } else {
+      this.tooltip.style.display = 'none';
+    }
+  }
+
+  _onMove(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const L = this._layout();
+    const plotW = L.w - L.padR - L.padL;
+    const n = this.candles.length;
+    if (!n) return;
+    const step = plotW / n;
+    const idx = Math.floor((x - L.padL) / step);
+    this.hover = idx >= 0 && idx < n ? idx : -1;
+    this.draw();
+  }
+
+  _onLeave() {
+    this.hover = -1;
+    this.draw();
+  }
+}
+
+/* ------------------------- sparkline (trend karti) ------------------------- */
+
+function drawSparkline(canvas, values, positive) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || 160;
+  const h = canvas.clientHeight || 34;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  if (!values || values.length < 2) return;
+  let min = Math.min.apply(null, values);
+  let max = Math.max.apply(null, values);
+  if (min === max) {
+    min -= 1;
+    max += 1;
+  }
+  const step = w / (values.length - 1);
+  const yOf = (v) => h - 3 - ((v - min) / (max - min)) * (h - 6);
+
+  const color = positive ? UP : DOWN;
+  ctx.beginPath();
+  values.forEach((v, i) => {
+    const x = i * step;
+    const y = yOf(v);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+
+  ctx.lineTo(w, h);
+  ctx.lineTo(0, h);
+  ctx.closePath();
+  ctx.fillStyle = positive ? 'rgba(31,210,134,.12)' : 'rgba(255,92,108,.12)';
+  ctx.fill();
+}
+
+/* ==================================================================
+ *  Veri yukleme
+ * ================================================================== */
+
+state.rowEls = {};
+
+async function loadOverview() {
+  const statusEl = document.getElementById('lastUpdate');
+  statusEl.textContent = 'Veriler yenileniyor…';
+  try {
+    const data = await api('/api/overview');
+    state.items = data.items || [];
+    state.bySymbol = {};
+    for (const it of state.items) state.bySymbol[it.symbol] = it;
+    state.updatedAt = data.updatedAt;
+
+    if (!Object.keys(state.rowEls).length) renderList();
+    else updateListNumbers();
+
+    renderTrends();
+    statusEl.innerHTML =
+      '<span class="ok">● Canli</span> · Guncelleme: ' +
+      new Date(state.updatedAt).toLocaleTimeString('tr-TR');
+  } catch (e) {
+    statusEl.innerHTML =
+      '<span class="err">● Baglanti hatasi</span> · ' + e.message;
+  }
+}
+
+/* ==================================================================
+ *  Hisse listesi
+ * ================================================================== */
+
+function renderList() {
+  const wrap = document.getElementById('stockList');
+  wrap.innerHTML = '';
+  state.rowEls = {};
+
+  const items = state.items
+    .slice()
+    .sort((a, b) => a.symbol.localeCompare(b.symbol, 'tr'));
+
+  for (const item of items) {
+    const row = buildRow(item);
+    state.rowEls[item.symbol] = row;
+    wrap.appendChild(row);
+  }
+  applyFilter();
+}
+
+function buildRow(item) {
+  const row = el('div', 'stock-row');
+  row.dataset.symbol = item.symbol;
+
+  const summary = el('div', 'stock-summary');
+
+  const main = el('div', 's-main');
+  const star = el('button', 'fav-star' + (isFav(item.symbol) ? ' on' : ''), '★');
+  star.title = 'Favorilere ekle / cikar';
+  star.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleFav(item.symbol);
+  });
+
+  const sym = el('span', 's-sym', item.symbol);
+  const name = el('span', 's-name', item.name);
+  main.appendChild(star);
+  main.appendChild(sym);
+  main.appendChild(name);
+
+  const price = el('span', 'num');
+  const chg = el('span', 'pct');
+  const wk = el('span', 'pct');
+
+  summary.appendChild(main);
+  summary.appendChild(price);
+  summary.appendChild(chg);
+  summary.appendChild(wk);
+
+  summary.addEventListener('click', () => toggleDetail(row));
+
+  row.appendChild(summary);
+  row._price = price;
+  row._chg = chg;
+  row._wk = wk;
+  updateRowValues(row, item);
+  return row;
+}
+
+function updateRowValues(row, item) {
+  row._price.textContent = fmtPrice(item.price);
+  row._chg.textContent = fmtPct(item.changePercent);
+  row._chg.className = 'pct ' + cls(item.changePercent);
+  row._wk.textContent = fmtPct(item.weekChangePercent);
+  row._wk.className = 'pct ' + cls(item.weekChangePercent);
+}
+
+function updateListNumbers() {
+  for (const sym in state.rowEls) {
+    const item = state.bySymbol[sym];
+    if (item) updateRowValues(state.rowEls[sym], item);
+  }
+}
+
+function applyFilter() {
+  const q = state.search.trim().toLocaleLowerCase('tr');
+  let visible = 0;
+  for (const sym in state.rowEls) {
+    const row = state.rowEls[sym];
+    const item = state.bySymbol[sym];
+    if (!item) continue;
+    let show = true;
+    if (state.favOnly && !isFav(sym)) show = false;
+    if (show && q) {
+      show =
+        sym.toLocaleLowerCase('tr').includes(q) ||
+        (item.name || '').toLocaleLowerCase('tr').includes(q);
+    }
+    row.classList.toggle('hidden', !show);
+    if (show) visible++;
+  }
+  const countEl = document.getElementById('listCount');
+  if (countEl)
+    countEl.textContent =
+      visible + (state.favOnly ? ' favori hisse' : ' hisse');
+}
+
+/* ==================================================================
+ *  Genisleyen detay + grafik
+ * ================================================================== */
+
+function closeDetail() {
+  if (state.openSymbol && state.rowEls[state.openSymbol]) {
+    const row = state.rowEls[state.openSymbol];
+    row.classList.remove('open');
+    const d = row.querySelector('.stock-detail');
+    if (d) {
+      if (d._chart) d._chart.destroy();
+      d.remove();
+    }
+  }
+  state.openSymbol = null;
+}
+
+function toggleDetail(row) {
+  const sym = row.dataset.symbol;
+  if (state.openSymbol === sym) {
+    closeDetail();
+    return;
+  }
+  closeDetail();
+
+  state.openSymbol = sym;
+  row.classList.add('open');
+
+  const detail = buildDetail(sym);
+  row.appendChild(detail);
+
+  loadChartInto(detail.querySelector('.chart-wrap'), sym, state.range, detail);
+  loadNews(sym);
+
+  row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function buildDetail(sym) {
+  const item = state.bySymbol[sym];
+  const detail = el('div', 'stock-detail');
+
+  const top = el('div', 'detail-top');
+
+  const meta = el('div', 'detail-meta');
+  meta.innerHTML =
+    '<span>Fiyat: <b>' + fmtPrice(item.price) + '</b></span>' +
+    '<span>Gunluk: <b class="' + cls(item.changePercent) + '">' +
+    fmtPct(item.changePercent) + '</b></span>' +
+    '<span>Haftalik: <b class="' + cls(item.weekChangePercent) + '">' +
+    fmtPct(item.weekChangePercent) + '</b></span>' +
+    '<span>Aylik: <b class="' + cls(item.monthChangePercent) + '">' +
+    fmtPct(item.monthChangePercent) + '</b></span>' +
+    '<span>Hacim: <b>' + fmtVolume(item.volume) + '</b></span>';
+
+  const controls = el('div', 'range-buttons');
+
+  const rangeWrap = el('div', 'range-buttons');
+  for (const r of RANGES) {
+    const b = el(
+      'button',
+      'range-btn' + (r.key === state.range ? ' active' : ''),
+      r.label
+    );
+    b.dataset.range = r.key;
+    b.addEventListener('click', () => {
+      state.range = r.key;
+      detail
+        .querySelectorAll('.range-btn')
+        .forEach((x) => x.classList.toggle('active', x.dataset.range === r.key));
+      loadChartInto(detail.querySelector('.chart-wrap'), sym, r.key, detail);
+    });
+    rangeWrap.appendChild(b);
+  }
+
+  const expand = el('button', 'expand-btn', '⛶ Buyut');
+  expand.addEventListener('click', () => openModal(sym));
+
+  controls.appendChild(rangeWrap);
+  controls.appendChild(expand);
+
+  top.appendChild(meta);
+  top.appendChild(controls);
+
+  const chartWrap = el('div', 'chart-wrap');
+  const loading = el('div', 'chart-loading', 'Grafik yukleniyor…');
+  chartWrap.appendChild(loading);
+
+  detail.appendChild(top);
+  detail.appendChild(chartWrap);
+  detail.dataset.symbol = sym;
+  return detail;
+}
+
+async function loadChartInto(wrapEl, sym, range, detail) {
+  const key = sym + ':' + range;
+  const overlay =
+    wrapEl.querySelector('.chart-loading') ||
+    wrapEl.querySelector('.chart-error');
+  if (overlay) {
+    overlay.className = 'chart-loading';
+    overlay.textContent = 'Grafik yukleniyor…';
+  }
+
+  try {
+    let payload = state.chartCache.get(key);
+    if (!payload) {
+      payload = await api(
+        '/api/chart?symbol=' + encodeURIComponent(sym) + '&range=' + range
+      );
+      state.chartCache.set(key, payload);
+    }
+    const ov = wrapEl.querySelector('.chart-loading, .chart-error');
+    if (ov) ov.remove();
+    if (detail && detail._chart) detail._chart.destroy();
+    const chart = new CandleChart(wrapEl);
+    chart.setData(payload);
+    if (detail) detail._chart = chart;
+    if (state.modalChart && state.modalSymbol === sym) {
+      state.modalChart.setData(payload);
+    }
+  } catch (e) {
+    const ov = wrapEl.querySelector('.chart-loading, .chart-error');
+    if (ov) {
+      ov.className = 'chart-error';
+      ov.textContent = 'Grafik alinamadi: ' + e.message;
+    } else {
+      wrapEl.appendChild(
+        el('div', 'chart-error', 'Grafik alinamadi: ' + e.message)
+      );
+    }
+  }
+}
+
+/* ------------------------- buyutme (modal) ------------------------- */
+
+function openModal(sym) {
+  const item = state.bySymbol[sym];
+  const modal = document.getElementById('modal');
+  document.getElementById('modalTitle').textContent =
+    sym + ' · ' + (item ? item.name : '');
+  document.getElementById('modalPrice').innerHTML = item
+    ? fmtPrice(item.price) +
+      '  <span class="' + cls(item.changePercent) + '">' +
+      fmtPct(item.changePercent) + '</span>'
+    : '';
+  modal.classList.remove('hidden');
+
+  const wrap = document.getElementById('modalChartWrap');
+  wrap.innerHTML = '';
+  const chartWrap = el('div', 'chart-wrap');
+  const loading = el('div', 'chart-loading', 'Grafik yukleniyor…');
+  chartWrap.appendChild(loading);
+  wrap.appendChild(chartWrap);
+
+  state.modalSymbol = sym;
+  if (state.modalChart) {
+    state.modalChart.destroy();
+    state.modalChart = null;
+  }
+
+  const key = sym + ':' + state.range;
+  const cached = state.chartCache.get(key);
+  const chart = new CandleChart(chartWrap);
+  state.modalChart = chart;
+  if (cached) {
+    loading.remove();
+    chart.setData(cached);
+  } else {
+    api('/api/chart?symbol=' + encodeURIComponent(sym) + '&range=' + state.range)
+      .then((payload) => {
+        state.chartCache.set(key, payload);
+        loading.remove();
+        chart.setData(payload);
+      })
+      .catch((e) => {
+        loading.className = 'chart-error';
+        loading.textContent = 'Grafik alinamadi: ' + e.message;
+      });
+  }
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.add('hidden');
+  if (state.modalChart) {
+    state.modalChart.destroy();
+    state.modalChart = null;
+  }
+  state.modalSymbol = null;
+  document.getElementById('modalChartWrap').innerHTML = '';
+}
+
+/* ==================================================================
+ *  Bugunun trendleri (son 1 haftanin en hareketli hisseleri)
+ * ================================================================== */
+
+function renderTrends() {
+  const wrap = document.getElementById('trends');
+  const movers = state.items
+    .filter((it) => it.weekChangePercent != null)
+    .sort(
+      (a, b) =>
+        Math.abs(b.weekChangePercent) - Math.abs(a.weekChangePercent)
+    )
+    .slice(0, 8);
+
+  if (!movers.length) {
+    wrap.innerHTML = '<div class="news-empty">Trend verisi yok</div>';
+    return;
+  }
+
+  wrap.innerHTML = '';
+  for (const it of movers) {
+    const card = el('div', 'trend-card');
+    card.dataset.symbol = it.symbol;
+
+    card.appendChild(el('div', 't-sym', it.symbol));
+    card.appendChild(el('div', 't-name', it.name));
+
+    const row = el('div', 't-row');
+    row.appendChild(el('span', 'muted', 'Haftalik'));
+    row.appendChild(
+      el('span', 't-pct ' + cls(it.weekChangePercent), fmtPct(it.weekChangePercent))
+    );
+    card.appendChild(row);
+
+    const row2 = el('div', 't-row');
+    row2.appendChild(el('span', 'muted', 'Bugun'));
+    const daily = el('span', cls(it.changePercent), fmtPct(it.changePercent));
+    row2.appendChild(daily);
+    card.appendChild(row2);
+
+    const canvas = el('canvas');
+    card.appendChild(canvas);
+
+    card.addEventListener('click', () => {
+      const rowEl = state.rowEls[it.symbol];
+      if (state.favOnly || state.search) {
+        state.favOnly = false;
+        state.search = '';
+        document.getElementById('search').value = '';
+        document.getElementById('favFilterBtn').classList.remove('active');
+        applyFilter();
+      }
+      document
+        .getElementById('stockList')
+        .scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (rowEl) toggleDetail(rowEl);
+    });
+
+    wrap.appendChild(card);
+    // sparkline cizimi (yerlesim sonrasi)
+    requestAnimationFrame(() =>
+      drawSparkline(canvas, it.sparkline, (it.weekChangePercent || 0) >= 0)
+    );
+  }
+}
+
+/* ==================================================================
+ *  Haberler (sag panel, son 7 gun)
+ * ================================================================== */
+
+async function loadNews(symbol) {
+  const listEl = document.getElementById('newsList');
+  const titleEl = document.getElementById('newsTitle');
+  const subEl = document.getElementById('newsSub');
+
+  listEl.innerHTML = '<div class="news-loading">Haberler yukleniyor…</div>';
+  const qs = symbol ? '?symbol=' + encodeURIComponent(symbol) : '?q=BIST100';
+  try {
+    const data = await api('/api/news' + qs);
+    titleEl.textContent = symbol ? '📰 ' + symbol + ' Haberleri' : '📰 Piyasa Haberleri';
+    subEl.textContent = (data.name || '') + ' · son 7 gun';
+
+    if (!data.items || !data.items.length) {
+      listEl.innerHTML =
+        '<div class="news-empty">Son 7 gunde haber bulunamadi.</div>';
+      return;
+    }
+    listEl.innerHTML = '';
+    for (const n of data.items) {
+      const a = el('a', 'news-item');
+      a.href = n.link;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+
+      a.appendChild(el('div', 'n-title', n.title));
+
+      const meta = el('div', 'n-meta');
+      if (n.source) meta.appendChild(el('span', 'n-source', n.source));
+      meta.appendChild(el('span', '', fmtRelative(n.publishedAt)));
+      a.appendChild(meta);
+
+      listEl.appendChild(a);
+    }
+  } catch (e) {
+    listEl.innerHTML =
+      '<div class="news-empty">Haberler alinamadi: ' + e.message + '</div>';
+  }
+}
+
+/* ==================================================================
+ *  Formasyon analizi (boga / yukselis sinyalleri)
+ * ================================================================== */
+
+let patternLoaded = false;
+
+function openPatternModal() {
+  document.getElementById('patternModal').classList.remove('hidden');
+  if (!patternLoaded) loadPatterns();
+}
+
+function closePatternModal() {
+  document.getElementById('patternModal').classList.add('hidden');
+}
+
+async function loadPatterns() {
+  patternLoaded = true;
+  const listEl = document.getElementById('patternList');
+  const subEl = document.getElementById('patternSub');
+  listEl.innerHTML = '<div class="pattern-loading">📐 BIST100 hisseleri formasyonlarla karşılaştırılıyor… (10-20 sn)</div>';
+  try {
+    const data = await api('/api/formations');
+    const st = data.stats || {};
+    subEl.textContent =
+      'BIST100 · ' + (st.scanned || data.scanned || 0) + ' hisse tarandı · ' +
+      (st.withData != null ? st.withData + ' hissede yeterli veri · ' : '') +
+      data.count + ' yükseliş sinyali';
+    if (!data.results || !data.results.length) {
+      if (st.withData === 0) {
+        listEl.innerHTML =
+          '<div class="pattern-loading">⚠️ Hisse verisi alınamadı (Yahoo Finance erişimi başarısız).<br>' +
+          '<span class="muted">İnternet bağlantısını kontrol edip tekrar deneyin.</span></div>';
+      } else {
+        listEl.innerHTML =
+          '<div class="pattern-loading">📉 Şu anda artış beklenen hisse yok.<br>' +
+          '<span class="muted">' + (st.withData || 0) + ' hissenin 1 yıllık serisi 8 boğa formasyonuyla ' +
+          'karşılaştırıldı; onaylı kırılımlı sinyal bulunamadı.</span></div>';
+      }
+      return;
+    }
+    listEl.innerHTML = '';
+    for (const r of data.results) listEl.appendChild(patternCard(r));
+  } catch (e) {
+    patternLoaded = false;
+    if (/API 404/.test(e.message)) {
+      listEl.innerHTML =
+        '<div class="pattern-loading">⚠️ Sunucu eski sürümde çalışıyor (rota bulunamadı).<br>' +
+        '<span class="muted">Terminalde Ctrl+C ile durdurup "npm start" ile yeniden başlatın.</span></div>';
+    } else {
+      listEl.innerHTML =
+        '<div class="pattern-loading">Tarama başarısız: ' + e.message + '</div>';
+    }
+  }
+}
+
+function patternCard(r) {
+  const card = el('div', 'pattern-card');
+  card.dataset.symbol = r.symbol;
+
+  const head = el('div', 'pc-head');
+  const symWrap = el('div', 'pc-sym');
+  symWrap.appendChild(el('span', 'pc-symbol', r.symbol));
+  symWrap.appendChild(el('span', 'pc-name', r.name));
+  head.appendChild(symWrap);
+  head.appendChild(el('span', 'pc-upside', '+' + r.upsidePct + '%'));
+  card.appendChild(head);
+
+  card.appendChild(el('div', 'pc-verdict',
+    r.patternName + ' formasyonundan faydalanarak ' + r.symbol +
+    ' hissesinin artacağını düşünüyorum.'
+  ));
+
+  card.appendChild(el('div', 'pc-detail', r.detail));
+  card.appendChild(el('div', 'pc-desc', r.description));
+
+  const meta = el('div', 'pc-meta');
+  meta.appendChild(el('span', '', 'Fiyat: ' + fmtPrice(r.lastClose) + ' ₺'));
+  meta.appendChild(el('span', '', 'Güven: %' + r.confidence));
+  meta.appendChild(el('span', '', r.type + ' · Güvenilirlik: ' + r.reliability));
+  meta.appendChild(el('span', 'pc-eta',
+    '⏳ Tahmini yükseliş zamanı: ' + (r.eta || r.timeframe || 'belirsiz')));
+  card.appendChild(meta);
+
+  const bar = el('div', 'pc-conf-bar');
+  const fill = el('div', 'pc-conf-fill');
+  fill.style.width = Math.min(100, r.confidence) + '%';
+  bar.appendChild(fill);
+  card.appendChild(bar);
+
+  card.addEventListener('click', () => {
+    closePatternModal();
+    openModal(r.symbol);
+  });
+  return card;
+}
+
+/* ==================================================================
+ *  Baslatma
+ * ================================================================== */
+
+function init() {
+  updateFavCount();
+
+  const search = document.getElementById('search');
+  search.addEventListener('input', () => {
+    state.search = search.value;
+    applyFilter();
+  });
+
+  const favBtn = document.getElementById('favFilterBtn');
+  favBtn.addEventListener('click', () => {
+    state.favOnly = !state.favOnly;
+    favBtn.classList.toggle('active', state.favOnly);
+    applyFilter();
+  });
+
+  document.getElementById('refreshBtn').addEventListener('click', () => {
+    state.chartCache.clear();
+    loadOverview();
+    loadNews(state.openSymbol || null);
+  });
+
+  document.getElementById('modalClose').addEventListener('click', closeModal);
+  document.getElementById('modal').addEventListener('click', (e) => {
+    if (e.target.id === 'modal') closeModal();
+  });
+  document.getElementById('patternBtn').addEventListener('click', openPatternModal);
+  document.getElementById('patternClose').addEventListener('click', closePatternModal);
+  document.getElementById('patternModal').addEventListener('click', (e) => {
+    if (e.target.id === 'patternModal') closePatternModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeModal();
+      closePatternModal();
+    }
+  });
+
+  loadOverview();
+  loadNews(null);
+
+  // Anlik guncelleme: her 60 saniyede bir fiyatlari yenile
+  setInterval(() => {
+    loadOverview();
+    document.getElementById('autoRefreshInfo').textContent =
+      'Otomatik yenileme: 60 sn';
+  }, 60 * 1000);
+  document.getElementById('autoRefreshInfo').textContent =
+    'Otomatik yenileme: 60 sn';
+}
+
+document.addEventListener('DOMContentLoaded', init);

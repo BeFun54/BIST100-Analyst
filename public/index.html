@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BIST100 Analyst - Canli Borsa Takip</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>" />
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">📈</span>
+      <div>
+        <h1>BIST100 Analyst</h1>
+        <span class="tagline">Canli fiyatlar &middot; Klasik grafikler &middot; 5 yillik veri</span>
+      </div>
+    </div>
+
+    <div class="top-actions">
+      <input id="search" type="search" placeholder="Hisse ara (orn. THYAO, Turk Hava)" autocomplete="off" />
+      <button id="favFilterBtn" class="btn btn-fav" title="Sadece favorileri goster">
+        <span class="star">★</span> Favorilerim <span id="favCount" class="badge">0</span>
+      </button>
+      <button id="assetsBtn" class="btn btn-assets" title="Varlıklarım">
+        💼 Varlıklarım <span id="assetCount" class="badge">0</span>
+      </button>
+      <button id="patternBtn" class="btn btn-pattern" title="Yükseliş formasyonu taraması">
+        📐 Formasyon Analizi
+      </button>
+      <button id="refreshBtn" class="btn" title="Verileri yenile">⟳</button>
+    </div>
+  </header>
+
+  <main class="layout">
+
+    <!-- SOL : trendler + hisse listesi -->
+    <section class="panel left">
+      <div id="statusBar" class="status-bar">
+        <span id="lastUpdate">Yukleniyor…</span>
+        <span id="autoRefreshInfo" class="muted"></span>
+      </div>
+
+      <div class="trends-section">
+        <div class="section-head">
+          <h2>🔥 Bugunun Trendleri</h2>
+          <span class="muted">Son 1 haftanin en hareketli hisseleri</span>
+        </div>
+        <div id="trends" class="trends-grid">
+          <div class="skeleton-card"></div>
+          <div class="skeleton-card"></div>
+          <div class="skeleton-card"></div>
+          <div class="skeleton-card"></div>
+        </div>
+      </div>
+
+      <div class="list-section">
+        <div class="section-head">
+          <h2>Tum Hisseler <span class="muted">(alfabetik)</span></h2>
+          <span id="listCount" class="muted"></span>
+        </div>
+        <div class="list-header">
+          <span>Hisse</span>
+          <span class="col-num">Son</span>
+          <span class="col-num">Gunluk</span>
+          <span class="col-num">Haftalik</span>
+        </div>
+        <div id="stockList" class="stock-list"></div>
+      </div>
+    </section>
+
+    <!-- SAG : haberler -->
+    <aside class="panel right">
+      <div class="news-head">
+        <h2 id="newsTitle">📰 Haberler</h2>
+        <span id="newsSub" class="muted">Piyasa gundemi (son 7 gun)</span>
+      </div>
+      <div id="newsList" class="news-list">
+        <div class="news-loading">Haberler yukleniyor…</div>
+      </div>
+    </aside>
+
+  </main>
+
+  <footer class="footer">
+    Veri kaynagi: Yahoo Finance &middot; Haberler: Google Haberler &middot;
+    Bu site yatirim tavsiyesi degildir.
+  </footer>
+
+  <!-- Grafik buyutme (modal) -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-box">
+      <div class="modal-head">
+        <div>
+          <h3 id="modalTitle">—</h3>
+          <span id="modalPrice" class="muted"></span>
+        </div>
+        <button id="modalClose" class="btn" title="Kapat">✕</button>
+      </div>
+      <div id="modalChartWrap" class="modal-chart"></div>
+    </div>
+  </div>
+
+  <!-- Formasyon analizi (modal) -->
+  <div id="patternModal" class="modal hidden">
+    <div class="modal-box pattern-box">
+      <div class="modal-head">
+        <div>
+          <h3>📐 Yükseliş Formasyonları</h3>
+          <span id="patternSub" class="muted">BIST100 taraması</span>
+        </div>
+        <button id="patternClose" class="btn" title="Kapat">✕</button>
+      </div>
+      <div class="pattern-legend">
+        Klasik teknik analiz formasyonlarıyla taranır. Sadece <b>artış beklenen</b>
+        (boğa) sinyalleri listelenir. Yatırım tavsiyesi değildir.
+      </div>
+      <div id="patternList" class="pattern-list">
+        <div class="pattern-loading">Formasyonlar taranıyor…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Varliklarim (modal) -->
+  <div id="assetsModal" class="modal hidden">
+    <div class="modal-box assets-box">
+      <div class="modal-head">
+        <div>
+          <h3>💼 Varlıklarım</h3>
+          <span id="assetsSub" class="muted">Portföyünüzdeki hisseler ve tahmini satış hedefleri</span>
+        </div>
+        <button id="assetsClose" class="btn" title="Kapat">✕</button>
+      </div>
+
+      <div class="assets-summary" id="assetsSummary"></div>
+
+      <div id="assetsList" class="assets-list"></div>
+
+      <div class="assets-add">
+        <div class="assets-add-head">➕ Varlık Ekle</div>
+        <form id="assetAddForm" class="assets-add-form">
+          <label>Hisse
+            <select id="assetSymbol" required></select>
+          </label>
+          <label>Adet
+            <input id="assetQty" type="number" min="0.000001" step="any" required placeholder="örn. 100" />
+          </label>
+          <label>Alış Fiyatı (₺)
+            <input id="assetPrice" type="number" min="0.01" step="any" required placeholder="örn. 250,50" />
+          </label>
+          <label>Alış Tarihi
+            <input id="assetDate" type="date" required />
+          </label>
+          <button type="submit" class="btn btn-pattern">Kaydet</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
