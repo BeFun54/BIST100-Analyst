@@ -18,11 +18,14 @@ const RANGES = [
 ];
 
 const FAV_KEY = 'bist100_favorites';
+const ASSET_KEY = 'bist100_assets';
 
 const state = {
   items: [],
   bySymbol: {},
   favorites: new Set(JSON.parse(localStorage.getItem(FAV_KEY) || '[]')),
+  assets: JSON.parse(localStorage.getItem(ASSET_KEY) || '[]'),
+  patternResults: [], // son formasyon taramasi sonuclari (varlik beklentisi icin)
   openSymbol: null,
   range: '1y',
   favOnly: false,
@@ -110,7 +113,184 @@ function updateFavCount() {
   if (el) el.textContent = String(state.favorites.size);
 }
 
-/* ------------------------- yardimcilar ------------------------- */
+/* ==================================================================
+ *  Varliklarim (portfoy) - localStorage
+ *  Her varlik: { id, symbol, qty, buyPrice, buyDate, patternName,
+ *               upsidePct, eta }  (son iki alan formasyon eklemesinde dolar)
+ * ================================================================== */
+
+function saveAssets() {
+  localStorage.setItem(ASSET_KEY, JSON.stringify(state.assets));
+  updateAssetCount();
+  renderAssets();
+}
+
+function updateAssetCount() {
+  const elBtn = document.getElementById('assetCount');
+  if (elBtn) elBtn.textContent = String(state.assets.length);
+}
+
+/** Varligin bagli oldugu guncel formasyon sinyali (varsa). */
+function currentPatternFor(symbol) {
+  for (const r of state.patternResults) {
+    if (r.symbol === symbol) return r;
+  }
+  return null;
+}
+
+/** Varligin formasyon beklentisi: once varliga kaydedilen, yoksa guncel tarama. */
+function assetExpectation(a) {
+  if (a.upsidePct != null) {
+    return { upsidePct: a.upsidePct, patternName: a.patternName || 'Formasyon', eta: a.eta || '' };
+  }
+  const r = currentPatternFor(a.symbol);
+  if (r) return { upsidePct: r.upsidePct, patternName: r.patternName, eta: r.eta || '' };
+  return null;
+}
+
+/** Tahmini satis (hedef) fiyati: alis + formasyon beklentisi %'si. */
+function assetTarget(a) {
+  const exp = assetExpectation(a);
+  if (!exp || !exp.upsidePct || !a.buyPrice) return null;
+  return a.buyPrice * (1 + exp.upsidePct / 100);
+}
+
+function addAsset(opts) {
+  state.assets.push({
+    id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+    symbol: opts.symbol,
+    qty: Number(opts.qty),
+    buyPrice: Number(opts.buyPrice),
+    buyDate: opts.buyDate || new Date().toISOString().slice(0, 10),
+    patternName: opts.pattern ? opts.pattern.patternName : null,
+    upsidePct: opts.pattern ? opts.pattern.upsidePct : null,
+    eta: opts.pattern ? opts.pattern.eta || null : null
+  });
+  saveAssets();
+}
+
+function removeAsset(id) {
+  state.assets = state.assets.filter((a) => a.id !== id);
+  saveAssets();
+}
+
+function openAssetsModal() {
+  document.getElementById('assetsModal').classList.remove('hidden');
+  populateAssetSymbolSelect();
+  renderAssets();
+}
+
+function closeAssetsModal() {
+  document.getElementById('assetsModal').classList.add('hidden');
+}
+
+function populateAssetSymbolSelect() {
+  const sel = document.getElementById('assetSymbol');
+  if (!sel || sel.options.length) return;
+  for (const it of state.items) {
+    const opt = document.createElement('option');
+    opt.value = it.symbol;
+    opt.textContent = it.symbol + ' · ' + (it.name || '');
+    sel.appendChild(opt);
+  }
+  sel.addEventListener('change', () => {
+    const it = state.bySymbol[sel.value];
+    const priceInput = document.getElementById('assetPrice');
+    if (it && it.price != null && !priceInput.value) {
+      priceInput.value = String(it.price);
+    }
+  });
+}
+
+function renderAssets() {
+  const listEl = document.getElementById('assetsList');
+  const sumEl = document.getElementById('assetsSummary');
+  if (!listEl) return;
+
+  if (!state.assets.length) {
+    listEl.innerHTML =
+      '<div class="assets-empty">Henüz varlık eklemediniz.<br>' +
+      '<span class="muted">Aşağıdaki formdan veya Formasyon Analizi ekranından ekleyebilirsiniz.</span></div>';
+    sumEl.innerHTML = '';
+    return;
+  }
+
+  let totalCost = 0;
+  let totalValue = 0;
+  listEl.innerHTML = '';
+
+  const head = el('div', 'asset-row asset-head');
+  ['Hisse', 'Adet', 'Alış', 'Anlık', 'Değer', 'K/Z', 'Formasyon Beklentisi', 'Tahmini Satış', ''].forEach((h) =>
+    head.appendChild(el('span', '', h))
+  );
+  listEl.appendChild(head);
+
+  for (const a of state.assets) {
+    const item = state.bySymbol[a.symbol];
+    const cur = item ? item.price : null;
+    const cost = a.qty * a.buyPrice;
+    const value = cur != null ? a.qty * cur : null;
+    const pl = value != null ? value - cost : null;
+    const plPct = value != null && cost > 0 ? ((value - cost) / cost) * 100 : null;
+
+    totalCost += cost;
+    if (value != null) totalValue += value;
+
+    const exp = assetExpectation(a);
+    const target = assetTarget(a);
+    const progress =
+      target && cur != null ? Math.max(0, Math.min(100, ((cur - a.buyPrice) / (target - a.buyPrice)) * 100)) : null;
+
+    const row = el('div', 'asset-row');
+
+    const symCell = el('div', 'asset-sym');
+    symCell.appendChild(el('span', 'asset-symbol', a.symbol));
+    symCell.appendChild(
+      el('span', 'asset-sub', fmtDate(a.buyDate) + (item ? ' · ' + (item.name || '') : ''))
+    );
+    row.appendChild(symCell);
+
+    row.appendChild(el('span', 'col-num', nf2.format(a.qty)));
+    row.appendChild(el('span', 'col-num', fmtPrice(a.buyPrice) + ' ₺'));
+    row.appendChild(el('span', 'col-num', fmtPrice(cur) + ' ₺'));
+    row.appendChild(el('span', 'col-num', value != null ? nf2.format(value) + ' ₺' : '—'));
+
+    const plCell = el('span', 'col-num asset-pl ' + cls(plPct));
+    plCell.innerHTML =
+      (pl != null ? (pl > 0 ? '+' : '') + nf2.format(pl) + ' ₺' : '—') +
+      (plPct != null ? '<small> (' + fmtPct(plPct) + ')</small>' : '');
+    row.appendChild(plCell);
+
+    const expCell = el('span', 'col-num asset-exp');
+    expCell.innerHTML = exp
+      ? '<b class="up">%' + nf2.format(exp.upsidePct) + '</b><small>' +
+        (exp.patternName || '') + (exp.eta ? ' · ' + exp.eta : '') + '</small>'
+      : '<small>—</small>';
+    row.appendChild(expCell);
+
+    const tgtCell = el('span', 'col-num asset-target');
+    tgtCell.innerHTML = target
+      ? '<b>' + fmtPrice(target) + ' ₺</b>' +
+        (progress != null ? '<small>hedefin %' + nf0.format(progress) + 'i</small>' : '')
+      : '<small>—</small>';
+    row.appendChild(tgtCell);
+
+    const del = el('button', 'asset-del', '✕');
+    del.title = 'Varlığı sil';
+    del.addEventListener('click', () => removeAsset(a.id));
+    row.appendChild(del);
+
+    listEl.appendChild(row);
+  }
+
+  const totalPl = totalValue - totalCost;
+  sumEl.innerHTML =
+    '<span>Toplam Maliyet: <b>' + nf2.format(totalCost) + ' ₺</b></span>' +
+    '<span>Güncel Değer: <b>' + nf2.format(totalValue) + ' ₺</b></span>' +
+    '<span>Kar/Zarar: <b class="' + cls(totalPl) + '">' +
+    (totalPl > 0 ? '+' : '') + nf2.format(totalPl) + ' ₺ (' +
+    fmtPct(totalCost > 0 ? (totalPl / totalCost) * 100 : null) + ')</b></span>';
+}
 
 async function api(path) {
   const res = await fetch(path, { headers: { Accept: 'application/json' } });
@@ -429,7 +609,9 @@ async function loadOverview() {
     if (!Object.keys(state.rowEls).length) renderList();
     else updateListNumbers();
 
+    populateAssetSymbolSelect();
     renderTrends();
+    renderAssets(); // varlik penceresi aciksa guncel fiyatlarla tazele
     statusEl.innerHTML =
       '<span class="ok">● Canli</span> · Guncelleme: ' +
       new Date(state.updatedAt).toLocaleTimeString('tr-TR');
@@ -859,6 +1041,7 @@ async function loadPatterns() {
   listEl.innerHTML = '<div class="pattern-loading">📐 BIST100 hisseleri formasyonlarla karşılaştırılıyor… (10-20 sn)</div>';
   try {
     const data = await api('/api/formations');
+    state.patternResults = data.results || [];
     const st = data.stats || {};
     subEl.textContent =
       'BIST100 · ' + (st.scanned || data.scanned || 0) + ' hisse tarandı · ' +
@@ -926,11 +1109,89 @@ function patternCard(r) {
   bar.appendChild(fill);
   card.appendChild(bar);
 
+  // "Varliklarima ekle" butonu + mini form
+  const addBtn = el('button', 'pc-add-btn', '➕ Varlıklarıma Ekle');
+  addBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const existing = card.querySelector('.pc-add-form');
+    if (existing) {
+      existing.remove();
+      addBtn.classList.remove('active');
+      return;
+    }
+    addBtn.classList.add('active');
+    const form = buildPatternAddForm(r, () => {
+      form.remove();
+      addBtn.classList.remove('active');
+    });
+    card.appendChild(form);
+  });
+  card.appendChild(addBtn);
+
   card.addEventListener('click', () => {
     closePatternModal();
     openModal(r.symbol);
   });
   return card;
+}
+
+/** Formasyon kartindan varlik ekleme mini formu uretir. */
+function buildPatternAddForm(r, onDone) {
+  const form = el('form', 'pc-add-form');
+  form.addEventListener('click', (e) => e.stopPropagation());
+
+  form.appendChild(el('span', 'pc-add-title',
+    r.symbol + ' · ' + r.patternName + ' · ' + r.lastClose + ' ₺'));
+
+  const qtyInput = el('input');
+  qtyInput.type = 'number';
+  qtyInput.min = '0.000001';
+  qtyInput.step = 'any';
+  qtyInput.required = true;
+  qtyInput.placeholder = 'Adet (örn. 100)';
+  form.appendChild(qtyInput);
+
+  const priceInput = el('input');
+  priceInput.type = 'number';
+  priceInput.min = '0.01';
+  priceInput.step = 'any';
+  priceInput.required = true;
+  priceInput.value = r.lastClose;
+  priceInput.title = 'Alış fiyatı (formasyon fiyatı ile öndolduruldu)';
+  form.appendChild(priceInput);
+
+  const dateInput = el('input');
+  dateInput.type = 'date';
+  dateInput.required = true;
+  dateInput.value = new Date().toISOString().slice(0, 10);
+  form.appendChild(dateInput);
+
+  const save = el('button', 'pc-add-save', 'Kaydet');
+  form.appendChild(save);
+
+  const msg = el('span', 'pc-add-msg');
+  form.appendChild(msg);
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!qtyInput.value || !priceInput.value) return;
+    addAsset({
+      symbol: r.symbol,
+      qty: qtyInput.value,
+      buyPrice: priceInput.value,
+      buyDate: dateInput.value,
+      pattern: {
+        patternName: r.patternName,
+        upsidePct: r.upsidePct,
+        eta: r.eta || r.timeframe || null
+      }
+    });
+    msg.textContent = '✓ Eklendi';
+    msg.classList.add('ok');
+    setTimeout(onDone, 900);
+  });
+
+  return form;
 }
 
 /* ==================================================================
@@ -968,10 +1229,30 @@ function init() {
   document.getElementById('patternModal').addEventListener('click', (e) => {
     if (e.target.id === 'patternModal') closePatternModal();
   });
+
+  // Varliklarim
+  updateAssetCount();
+  document.getElementById('assetsBtn').addEventListener('click', openAssetsModal);
+  document.getElementById('assetsClose').addEventListener('click', closeAssetsModal);
+  document.getElementById('assetsModal').addEventListener('click', (e) => {
+    if (e.target.id === 'assetsModal') closeAssetsModal();
+  });
+  document.getElementById('assetAddForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const sym = document.getElementById('assetSymbol').value;
+    const qty = document.getElementById('assetQty').value;
+    const price = document.getElementById('assetPrice').value;
+    const date = document.getElementById('assetDate').value;
+    if (!sym || !qty || !price) return;
+    addAsset({ symbol: sym, qty, buyPrice: price, buyDate: date });
+    e.target.reset();
+  });
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       closeModal();
       closePatternModal();
+      closeAssetsModal();
     }
   });
 
