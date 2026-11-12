@@ -659,3 +659,116 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
   font-size: 12px;
   border-top: 1px solid var(--border);
 }
+
+/* ---------------- AI Analiz butonu ---------------- */
+.btn-ai {
+  border-color: #7c3aed;
+  color: #a78bfa;
+}
+.btn-ai:hover {
+  background: #3f1366;
+  border-color: var(--accent);
+}
+
+/* ---------------- AI Modal ---------------- */
+.ai-box {
+  max-width: 700px;
+  width: 90vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+.ai-box .modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.ai-box .modal-head h3 {
+  font-size: 17px;
+}
+.ai-box .ai-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 0 18px;
+}
+.ai-box .ai-tab {
+  flex: 1;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 12px 16px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: color .2s, border-color .2s;
+}
+.ai-box .ai-tab:hover {
+  color: var(--text);
+}
+.ai-box .ai-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: rgba(79, 157, 255, .06);
+}
+.ai-box .ai-tab-panel {
+  display: none;
+  padding: 18px;
+  overflow-y: auto;
+  flex: 1;
+}
+.ai-box .ai-tab-panel.active {
+  display: block;
+}
+.ai-content {
+  line-height: 1.6;
+  white-space: pre-wrap;
+  font-size: 14px;
+  color: var(--text);
+}
+.ai-loading {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 20px;
+  text-align: center;
+}
+.ai-stock-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.ai-stock-controls label {
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.ai-stock-controls select {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  min-width: 140px;
+  cursor: pointer;
+}
+.ai-stock-controls select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.ai-disclaimer {
+  padding: 12px 18px;
+  font-size: 11.5px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  background: var(--panel-2);
+  text-align: center;
+  font-style: italic;
+}

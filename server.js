@@ -15,6 +15,7 @@ const path = require('path');
 
 const yahoo = require('./lib/yahoo');
 const news = require('./lib/news');
+const ai = require('./lib/ai');
 const { BIST100, bySymbol } = require('./data/bist100');
 const { PATTERN_LIBRARY, scanBullishPatterns, etaLabel } = require('./lib/patterns');
 
@@ -315,6 +316,101 @@ async function handleApi(req, res, urlObj) {
       symbol: symbol || null,
       name: stock ? stock.name : 'Piyasa Genel',
       items: data
+    });
+  }
+
+  if (p === '/api/ai-analysis') {
+    let data = cacheGet('ai:market');
+    if (!data) {
+      try {
+        const overview = await buildOverview();
+        const marketNews = await news.getNews(
+          'BIST100 OR "Borsa Istanbul"', { days: 7, limit: 10 }
+        );
+        const summary = await ai.analyzeMarket(overview.items, marketNews);
+        data = { updatedAt: Date.now(), summary };
+        cacheSet('ai:market', data, 10 * 60 * 1000); // 10 dk onbellek
+      } catch (e) {
+        return sendJson(res, 502, {
+          error: 'AI piyasa analizi alinamadi',
+          detail: String((e && e.message) || e)
+        });
+      }
+    }
+    return sendJson(res, 200, data);
+  }
+
+  if (p === '/api/ai-analysis-stock') {
+    const symbol = (urlObj.searchParams.get('symbol') || '').toUpperCase();
+    const stock = bySymbol[symbol];
+    if (!stock) return sendJson(res, 400, { error: 'Bilinmeyen sembol' });
+
+    const range = urlObj.searchParams.get('range') || '1y';
+    let chartData = null;
+    try {
+      chartData = await dedupe('chart:' + symbol + ':' + range, () =>
+        yahoo.getChart(stock.yahoo, range).then((v) =>
+          cacheSet('chart:' + symbol + ':' + range, v, 5 * 60 * 1000)
+        )
+      );
+    } catch (e) {
+      // grafik olmasa da analiz yapilabilir
+    }
+
+    let stockNews = [];
+    try {
+      stockNews = await news.getNews(
+        '"' + stock.name + '" OR ' + stock.symbol,
+        { days: 7, limit: 5 }
+      );
+    } catch (_) {
+      stockNews = [];
+    }
+
+    const pattern = null; // formsiyon verisi istemci tarafindan gonderebilir
+    let summary = '';
+    try {
+      // Basit hisse  bilgileri (grafikten son kapanis, degisimler)
+      let lastClose = null;
+      let dailyPct = null;
+      let weeklyPct = null;
+      let volume = null;
+      if (chartData && chartData.candles && chartData.candles.length) {
+        const c = chartData.candles;
+        lastClose = c[c.length - 1].c;
+        if (c.length >= 2) {
+          dailyPct = round(((c[c.length - 1].c - c[c.length - 2].c) / c[c.length - 2].c) * 100, 2);
+        }
+        const weekBaseIdx = Math.max(0, c.length - 6);
+        weeklyPct = round(((c[c.length - 1].c - c[weekBaseIdx].c) / c[weekBaseIdx].c) * 100, 2);
+        volume = c[c.length - 1].v || 0;
+      }
+
+      summary = await ai.analyzeStock(
+        {
+          symbol: stock.symbol,
+          name: stock.name,
+          lastClose,
+          dailyPct,
+          weeklyPct,
+          volume
+        },
+        chartData ? chartData.candles : [],
+        stockNews,
+        pattern
+      );
+    } catch (e) {
+      return sendJson(res, 502, {
+        error: 'AI hisse analizi alinamadi',
+        detail: String((e && e.message) || e)
+      });
+    }
+
+    return sendJson(res, 200, {
+      symbol: stock.symbol,
+      name: stock.name,
+      summary,
+      updatedAt: Date.now()
     });
   }
 

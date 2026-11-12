@@ -31,7 +31,9 @@ const state = {
   favOnly: false,
   search: '',
   chartCache: new Map(),
-  updatedAt: null
+  updatedAt: null,
+  aiMarketSummary: null,
+  aiStockSummaries: {}
 };
 
 /* ------------------------- bicimlendirme ------------------------- */
@@ -1195,6 +1197,94 @@ function buildPatternAddForm(r, onDone) {
 }
 
 /* ==================================================================
+ *  AI Analiz
+ * ================================================================== */
+
+function openAIModal() {
+  const modal = document.getElementById('aiModal');
+  if (modal) modal.classList.remove('hidden');
+  if (!state.aiMarketSummary) loadAIOverview();
+  populateAIStockSelect();
+}
+
+function closeAIModal() {
+  const modal = document.getElementById('aiModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+async function loadAIOverview() {
+  const content = document.getElementById('ai-market-content');
+  const loading = document.querySelector('#ai-market .ai-loading');
+  if (content) content.innerHTML = '';
+  if (loading) loading.style.display = 'block';
+
+  try {
+    const res = await fetch('/api/ai-analysis');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Sunucu hatasi (kodu ' + res.status + ')');
+    }
+    const data = await res.json();
+    state.aiMarketSummary = data.summary;
+    if (content) content.textContent = data.summary || 'AI analizi bos dondurdu.';
+  } catch (e) {
+    if (content) content.textContent = 'AI piyasa analizi yuklenemedi: ' + e.message;
+  } finally {
+    if (loading) loading.style.display = 'none';
+  }
+}
+
+async function loadAIStock(symbol) {
+  const content = document.getElementById('ai-stock-content');
+  const loading = document.getElementById('aiStockLoading');
+  if (content) content.innerHTML = '';
+  if (loading) loading.style.display = 'block';
+
+  // Cache kontrolu
+  if (state.aiStockSummaries[symbol]) {
+    if (content) content.textContent = state.aiStockSummaries[symbol];
+    if (loading) loading.style.display = 'none';
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/ai-analysis-stock?symbol=' + encodeURIComponent(symbol) + '&range=1y');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Sunucu hatasi (kodu ' + res.status + ')');
+    }
+    const data = await res.json();
+    state.aiStockSummaries[symbol] = data.summary || 'AI analizi bos dondurdu.';
+    if (content) content.textContent = state.aiStockSummaries[symbol];
+  } catch (e) {
+    if (content) content.textContent = 'AI hisse analizi yuklenemedi: ' + e.message;
+  } finally {
+    if (loading) loading.style.display = 'none';
+  }
+}
+
+function populateAIStockSelect() {
+  const select = document.getElementById('aiStockSelect');
+  if (!select) return;
+  select.innerHTML = '<option value="">-- Hisse secin --</option>';
+  for (const s of state.items) {
+    const opt = document.createElement('option');
+    opt.value = s.symbol;
+    opt.textContent = s.symbol + ' - ' + s.name;
+    select.appendChild(opt);
+  }
+}
+
+function switchAITab(tabId) {
+  document.querySelectorAll('.ai-tab').forEach((t) => {
+    t.classList.toggle('active', t.dataset.tab === tabId);
+  });
+  document.querySelectorAll('.ai-tab-panel').forEach((p) => {
+    p.classList.toggle('active', p.id === tabId);
+  });
+}
+
+/* ==================================================================
  *  Baslatma
  * ================================================================== */
 
@@ -1248,16 +1338,44 @@ function init() {
     e.target.reset();
   });
 
+  // AI Analiz butonu
+  document.getElementById('aiBtn').addEventListener('click', openAIModal);
+  document.getElementById('aiClose').addEventListener('click', closeAIModal);
+  document.getElementById('aiModal').addEventListener('click', (e) => {
+    if (e.target.id === 'aiModal') closeAIModal();
+  });
+
+  // AI sekmeleri
+  document.querySelectorAll('.ai-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      switchAITab(tab.dataset.tab);
+      if (tab.dataset.tab === 'ai-stock') {
+        const sel = document.getElementById('aiStockSelect');
+        if (sel && sel.value) loadAIStock(sel.value);
+      }
+    });
+  });
+
+  // Hisse analiz butonu
+  document.getElementById('aiAnalyzeStockBtn').addEventListener('click', () => {
+    const sel = document.getElementById('aiStockSelect');
+    if (sel && sel.value) loadAIStock(sel.value);
+  });
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       closeModal();
       closePatternModal();
       closeAssetsModal();
+      closeAIModal();
     }
   });
 
   loadOverview();
   loadNews(null);
+
+  // Sayfa yuklendiginde/yenilendiginde otomatik AI piyasa analizi (arkaplan)
+  loadAIOverview();
 
   // Anlik guncelleme: her 60 saniyede bir fiyatlari yenile
   setInterval(() => {

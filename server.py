@@ -415,8 +415,185 @@ def cache_set(key, value, ttl):
 
 
 # ------------------------------------------------------------------ #
-#  HTTP isleyici
+#  AI Analiz (NVIDIA NIM / DeepSeek)
 # ------------------------------------------------------------------ #
+
+AI_API_KEY = os.environ.get('AI_API_KEY', 'DEV_ONLY_PLACEHOLDER')
+AI_API_BASE = os.environ.get('AI_API_BASE', 'https://evren-llmapi.ssyz.org.tr/v1/chat/completions')
+AI_MODEL = 'deepseek-v4.1-flash'
+TERMS_BASE = 'https://evren-llmapi.ssyz.org.tr/v1'
+_terms_accepted = False
+
+
+def http_post_json(url, body, timeout=90):
+    data = json.dumps(body).encode('utf-8')
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + AI_API_KEY,
+            'Accept': 'application/json',
+            'User-Agent': 'BIST100-Analyst-Python/1.0'
+        },
+        method='POST'
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode('utf-8', 'replace')
+            if resp.status < 200 or resp.status >= 300:
+                raise RuntimeError('AI API hata kodu ' + str(resp.status) + ': ' + raw)
+            return json.loads(raw)
+    except urllib.error.HTTPError as he:
+        body_err = he.read().decode('utf-8', 'replace')
+        raise RuntimeError('AI API hata kodu ' + str(he.code) + ': ' + body_err)
+
+
+def _extract_text(j):
+    try:
+        return j['choices'][0]['message']['content']
+    except Exception:
+        return 'AI yorumu olusturulamadi (gecersiz yanit).'
+
+
+def accept_terms():
+    global _terms_accepted
+    if _terms_accepted:
+        return
+    try:
+        import urllib.request
+        import urllib.error
+        req = urllib.request.Request(
+            TERMS_BASE + '/terms/accept',
+            data=json.dumps({'version': 1}).encode('utf-8'),
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + AI_API_KEY,
+                'Accept': 'application/json',
+                'User-Agent': 'BIST100-Analyst-Python/1.0'
+            },
+            method='POST'
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp.read()
+        except urllib.error.HTTPError:
+            pass  # Zaten kabul edilmis olabilir
+        _terms_accepted = True
+    except Exception:
+        _terms_accepted = True
+
+
+def _build_stock_prompt(stock, candles, news_items, pattern):
+    lines = []
+    lines.append('Hisse: ' + stock['symbol'] + ' (' + stock['name'] + ')')
+    lines.append('Son fiyat: ' + (str(stock.get('lastClose')) + ' TL' if stock.get('lastClose') is not None else '—'))
+    lines.append('Gunluk degisim: ' + (str(stock.get('dailyPct')) + '%' if stock.get('dailyPct') is not None else '—'))
+    lines.append('Haftalik degisim: ' + (str(stock.get('weeklyPct')) + '%' if stock.get('weeklyPct') is not None else '—'))
+    lines.append('Hacim: ' + (str(stock.get('volume')) if stock.get('volume') is not None else '—'))
+    if candles:
+        last = candles[-1]
+        lines.append('Son mum: A=' + str(last['o']) + ' H=' + str(last['h']) + ' L=' + str(last['l']) + ' C=' + str(last['c']))
+        if len(candles) >= 5:
+            c5 = [c['c'] for c in candles[-5:]]
+            lines.append('Son 5 gun araligi: min=' + str(min(c5)) + ' max=' + str(max(c5)))
+    if pattern:
+        lines.append('Tespit edilen formasyon: ' + pattern.get('name', '') + ' (' + pattern.get('type', '') + ')')
+        lines.append('Formasyon guvenilirligi: ' + str(pattern.get('reliability', '—')))
+        lines.append('Formasyon detayi: ' + pattern.get('description', ''))
+    if news_items:
+        lines.append('Son haberler:')
+        for n in news_items[:5]:
+            lines.append('- ' + n.get('title', ''))
+    lines.append('')
+    lines.append('Lutfen yukaridaki verileri dikkate alarak ' + stock['symbol'] +
+                 ' icin kisa, etkili ve Turkce bir teknik ve temel analiz yaz. ' +
+                 'Fiyat eylemi, formasyon (varsa), haber etkisi ve risk notlarini icerir.')
+    return '\n'.join(lines)
+
+
+def _build_market_prompt(overview_items, news_items):
+    lines = []
+    lines.append('BIST100 Piyasa Genel Durumu:')
+    lines.append('Toplam hisse sayisi: ' + str(len(overview_items)))
+    up = sum(1 for s in overview_items if s.get('dailyPct') is not None and s['dailyPct'] > 0)
+    down = sum(1 for s in overview_items if s.get('dailyPct') is not None and s['dailyPct'] < 0)
+    flat = len(overview_items) - up - down
+    lines.append('Yukselen: ' + str(up) + ' | Dusen: ' + str(down) + ' | Degismemis: ' + str(flat))
+    sorted_items = sorted(
+        [s for s in overview_items if s.get('dailyPct') is not None],
+        key=lambda s: s['dailyPct'], reverse=True)
+    top_gainers = [s['symbol'] + ' (%' + str(s['dailyPct']) + ')' for s in sorted_items[:5]]
+    top_losers = [s['symbol'] + ' (%' + str(s['dailyPct']) + ')' for s in sorted_items[-5:]]
+    lines.append('En cok yukselenler: ' + ', '.join(top_gainers))
+    lines.append('En cok dusenler: ' + ', '.join(top_losers))
+    if news_items:
+        lines.append('Son piyasa haberleri:')
+        for n in news_items[:5]:
+            lines.append('- ' + n.get('title', ''))
+    lines.append('')
+    lines.append('Lutfen yukaridaki BIST100 genel gorusune dayanarak kisa, ' +
+                 'Turkce bir piyasa yorumu yaz. Trend yonu, sektorgelismeleri, ' +
+                 'risk faktorsu ve kisa vadeli beklemeleri icerir.')
+    return '\n'.join(lines)
+
+
+def ai_analyze_market(overview_items, news_items):
+    accept_terms()
+    prompt = _build_market_prompt(overview_items, news_items)
+    j = http_post_json(AI_API_BASE, {
+        'model': AI_MODEL,
+        'messages': [
+            {'role': 'system', 'content': 'Sen BIST100 (Borsa Istanbul) uzmani bir finansal analizci sun. Turkce, kesin, net ve objektif cevaplar ver. Yatirim tavsiyesi verme, sadece analiz ve yorum yap. Her yorumun sonunda "Bu bir yatirim tavsiyesi degildir." ibaresini ekle.'},
+            {'role': 'user', 'content': prompt}
+        ],
+        'temperature': 0.4,
+        'max_tokens': 900,
+        'stream': False
+    })
+    summary = _extract_text(j)
+    return {'updatedAt': int(time.time() * 1000), 'summary': summary}
+
+
+def ai_analyze_stock(symbol, candles, news_items, pattern=None):
+    accept_terms()
+    st = BY_SYMBOL.get(symbol)
+    if not st:
+        raise ValueError('Bilinmeyen sembol: ' + symbol)
+
+    last_close = None
+    daily_pct = None
+    weekly_pct = None
+    volume = None
+    if candles:
+        last_close = candles[-1]['c']
+        if len(candles) >= 2:
+            daily_pct = rnd((candles[-1]['c'] - candles[-2]['c']) / candles[-2]['c'] * 100, 2)
+        idx = max(0, len(candles) - 6)
+        weekly_pct = rnd((candles[-1]['c'] - candles[idx]['c']) / candles[idx]['c'] * 100, 2)
+        volume = candles[-1].get('v', 0)
+
+    prompt = _build_stock_prompt({
+        'symbol': st['symbol'],
+        'name': st['name'],
+        'lastClose': last_close,
+        'dailyPct': daily_pct,
+        'weeklyPct': weekly_pct,
+        'volume': volume
+    }, candles, news_items, pattern)
+
+    j = http_post_json(AI_API_BASE, {
+        'model': AI_MODEL,
+        'messages': [
+            {'role': 'system', 'content': 'Sen BIST100 (Borsa Istanbul) uzmani bir finansal analizci sun. Turkce, kesin, net ve objektif cevaplar ver. Yatirim tavsiyesi verme, sadece analiz ve yorum yap. Her yorumun sonunda "Bu bir yatirim tavsiyesi degildir." ibaresini ekle.'},
+            {'role': 'user', 'content': prompt}
+        ],
+        'temperature': 0.4,
+        'max_tokens': 700,
+        'stream': False
+    })
+    return _extract_text(j)
+
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -480,6 +657,40 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "name": stock["name"] if stock else "Piyasa Genel",
                     "items": data,
                 })
+
+            if path == "/api/ai-analysis":
+                try:
+                    overview = build_overview()
+                    market_news = get_news('BIST100 OR "Borsa Istanbul"', 7, 10)
+                    result = ai_analyze_market(overview["items"], market_news)
+                    return self._send_json(200, result)
+                except Exception as e:
+                    return self._send_json(502, {"error": "AI piyasa analizi alinamadi", "detail": str(e)})
+
+            if path == "/api/ai-analysis-stock":
+                symbol = (qs.get("symbol", [""])[0]).upper()
+                stock = BY_SYMBOL.get(symbol)
+                if not stock:
+                    return self._send_json(400, {"error": "Bilinmeyen sembol"})
+                rng = qs.get("range", ["1y"])[0]
+                try:
+                    chart_data = yahoo_chart(stock["yahoo"], rng)
+                except Exception:
+                    chart_data = {"candles": []}
+                try:
+                    stock_news = get_news('"' + stock["name"] + '" OR ' + stock["symbol"], 7, 5)
+                except Exception:
+                    stock_news = []
+                try:
+                    summary = ai_analyze_stock(symbol, chart_data.get("candles", []), stock_news)
+                    return self._send_json(200, {
+                        "symbol": stock["symbol"],
+                        "name": stock["name"],
+                        "summary": summary,
+                        "updatedAt": int(time.time() * 1000)
+                    })
+                except Exception as e:
+                    return self._send_json(502, {"error": "AI hisse analizi alinamadi", "detail": str(e)})
 
             return self._send_json(404, {"error": "Bulunamadi"})
         except Exception as e:
