@@ -388,7 +388,7 @@ class CandleChart {
   draw() {
     const ctx = this.ctx;
     const L = this._layout();
-    const { w, h, padL, padR, padT, priceH, volTop, volH } = L;
+    const { w, h, padL, padR, padT, padB, priceH, volTop, volH } = L;
 
     ctx.clearRect(0, 0, w, h);
 
@@ -742,6 +742,7 @@ function toggleDetail(row) {
   const sym = row.dataset.symbol;
   if (state.openSymbol === sym) {
     closeDetail();
+    loadNews(null);
     return;
   }
   closeDetail();
