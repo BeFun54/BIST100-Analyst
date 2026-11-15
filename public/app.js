@@ -1026,6 +1026,7 @@ async function loadNews(symbol) {
  * ================================================================== */
 
 let patternLoaded = false;
+let patternAiToken = 0;
 
 function openPatternModal() {
   document.getElementById('patternModal').classList.remove('hidden');
@@ -1040,6 +1041,8 @@ async function loadPatterns() {
   patternLoaded = true;
   const listEl = document.getElementById('patternList');
   const subEl = document.getElementById('patternSub');
+  const sumEl = document.getElementById('patternAiSummary');
+  if (sumEl) { sumEl.style.display = 'none'; sumEl.innerHTML = ''; }
   listEl.innerHTML = '<div class="pattern-loading">📐 BIST100 hisseleri formasyonlarla karşılaştırılıyor… (10-20 sn)</div>';
   try {
     const data = await api('/api/formations');
@@ -1064,6 +1067,8 @@ async function loadPatterns() {
     }
     listEl.innerHTML = '';
     for (const r of data.results) listEl.appendChild(patternCard(r));
+    // Kural-tabanli sonuclar gosterildi; simdi AI ile dogrula.
+    aiReviewPatterns(data);
   } catch (e) {
     patternLoaded = false;
     if (/API 404/.test(e.message)) {
@@ -1074,6 +1079,70 @@ async function loadPatterns() {
       listEl.innerHTML =
         '<div class="pattern-loading">Tarama başarısız: ' + e.message + '</div>';
     }
+  }
+}
+
+/** Formasyon alt basligini uretir; aiState verilirse sonuna eklenir. */
+function patternSubtitle(data, aiState) {
+  const st = data.stats || {};
+  let s = 'BIST100 · ' + (st.scanned || data.scanned || 0) + ' hisse tarandı · ' +
+    (st.withData != null ? st.withData + ' hissede yeterli veri · ' : '') +
+    (data.count != null ? data.count : (data.results || []).length) + ' yükseliş sinyali';
+  if (aiState) s += ' · ' + aiState;
+  return s;
+}
+
+/** AI dogrulama ozet banner'ini gunceller. */
+function showAiSummary(data) {
+  const box = document.getElementById('patternAiSummary');
+  if (!box) return;
+  const s = data.aiSummary;
+  if (!data.aiValidated || !s) {
+    box.style.display = 'none';
+    box.innerHTML = '';
+    return;
+  }
+  box.innerHTML = '';
+  box.appendChild(el('span', 'ai-sum-title', '🤖 Yapay zeka doğrulaması'));
+  box.appendChild(el('span', 'ai-sum-ok', '✓ ' + s.approved + ' onaylandı'));
+  box.appendChild(el('span', 'ai-sum-fix', '✎ ' + s.adjusted + ' düzeltildi'));
+  box.appendChild(el('span', 'ai-sum-rej', '✕ ' + s.rejected + ' elendi'));
+  if (s.scanned != null) {
+    box.appendChild(el('span', 'ai-sum-total', '(' + s.scanned + ' aday incelendi)'));
+  }
+  box.style.display = 'flex';
+}
+
+/** Kural-tabanli sonuclari AI ile dogrular ve arayuzu gunceller. */
+async function aiReviewPatterns(base) {
+  const token = ++patternAiToken;
+  const listEl = document.getElementById('patternList');
+  const subEl = document.getElementById('patternSub');
+  if (subEl) subEl.textContent = patternSubtitle(base, '🤖 AI doğrulaması yapılıyor…');
+  if (listEl) {
+    listEl.insertBefore(
+      el('div', 'pattern-ai-note',
+        '🤖 Yapay zeka formasyonları gerçek fiyat serisine göre gözden geçiriyor… (15-30 sn)'),
+      listEl.firstChild
+    );
+  }
+  try {
+    const data = await api('/api/ai-formations');
+    if (token !== patternAiToken) return;
+    state.patternResults = data.results || [];
+    if (subEl) subEl.textContent = patternSubtitle(data, '🤖 AI doğrulandı');
+    showAiSummary(data);
+    listEl.innerHTML = '';
+    if (!data.results || !data.results.length) {
+      listEl.innerHTML =
+        '<div class="pattern-loading">📉 AI doğrulaması sonrası geçerli yükseliş formasyonu kalmadı.</div>';
+      return;
+    }
+    for (const r of data.results) listEl.appendChild(patternCard(r));
+  } catch (e) {
+    if (token !== patternAiToken) return;
+    if (subEl) subEl.textContent =
+      patternSubtitle(base, '⚠️ AI doğrulaması alınamadı: ' + e.message);
   }
 }
 
@@ -1097,6 +1166,16 @@ function patternCard(r) {
   card.appendChild(el('div', 'pc-detail', r.detail));
   card.appendChild(el('div', 'pc-desc', r.description));
 
+  // AI dogrulama rozeti ve gerekcesi
+  if (r.aiVerdict) {
+    const labels = { approve: '🤖 AI onayladı', adjust: '🤖 AI düzeltti' };
+    card.appendChild(el('span', 'pc-ai-badge pc-ai-' + r.aiVerdict,
+      labels[r.aiVerdict] || '🤖 AI'));
+    if (r.aiComment) {
+      card.appendChild(el('div', 'pc-ai-comment', '🤖 ' + r.aiComment));
+    }
+  }
+
   const meta = el('div', 'pc-meta');
   meta.appendChild(el('span', '', 'Fiyat: ' + fmtPrice(r.lastClose) + ' ₺'));
   meta.appendChild(el('span', '', 'Güven: %' + r.confidence));
@@ -1104,6 +1183,13 @@ function patternCard(r) {
   meta.appendChild(el('span', 'pc-eta',
     '⏳ Tahmini yükseliş zamanı: ' + (r.eta || r.timeframe || 'belirsiz')));
   card.appendChild(meta);
+
+  if (r.origUpsidePct != null || r.origConfidence != null) {
+    const parts = [];
+    if (r.origUpsidePct != null) parts.push('hedef %' + r.origUpsidePct + ' → %' + r.upsidePct);
+    if (r.origConfidence != null) parts.push('güven %' + r.origConfidence + ' → %' + r.confidence);
+    card.appendChild(el('div', 'pc-ai-note', '🤖 AI düzeltmesi: ' + parts.join(' · ')));
+  }
 
   const bar = el('div', 'pc-conf-bar');
   const fill = el('div', 'pc-conf-fill');

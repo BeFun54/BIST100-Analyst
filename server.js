@@ -13,6 +13,8 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
+require('./lib/env'); // proje kokundeki .env dosyasini yukler (varsa)
+
 const yahoo = require('./lib/yahoo');
 const news = require('./lib/news');
 const ai = require('./lib/ai');
@@ -65,6 +67,20 @@ function round(n, d = 2) {
 function pctChange(from, to) {
   if (from == null || to == null || from === 0) return null;
   return round(((to - from) / from) * 100, 2);
+}
+
+function avg(arr) {
+  if (!arr || !arr.length) return null;
+  let s = 0;
+  for (const v of arr) s += v;
+  return s / arr.length;
+}
+
+/** Bir formasyon sonucundan sadece istemciye gidecek alanlari birakir. */
+function publicFormation(f) {
+  if (!f) return f;
+  const { context, ...rest } = f; // eslint-disable-line no-unused-vars
+  return rest;
 }
 
 /** Seride indeksten geriye dogru kapanis (negatif = geriye). */
@@ -201,7 +217,18 @@ async function buildFormations() {
     const matches = scanBullishPatterns(sp.points);
     if (!matches.length) continue;
 
-    const lastClose = sp.points[sp.points.length - 1].c;
+    const allCloses = sp.points.map((p) => p.c);
+    const lastClose = allCloses[allCloses.length - 1];
+    // AI dogrulamasi icin kompakt fiyat baglami (istemciye gonderilmez).
+    const w60 = allCloses.slice(-60);
+    const context = {
+      series: allCloses.slice(-45).map((c) => round(c, 2)),
+      high60: round(Math.max.apply(null, w60), 2),
+      low60: round(Math.min.apply(null, w60), 2),
+      ma50: allCloses.length >= 50 ? round(avg(allCloses.slice(-50)), 2) : null,
+      ma200: allCloses.length >= 200 ? round(avg(allCloses.slice(-200)), 2) : null
+    };
+
     for (const m of matches) {
       stats.perPattern[m.key] = (stats.perPattern[m.key] || 0) + 1;
       const lib = PATTERN_LIBRARY[m.key];
@@ -218,7 +245,8 @@ async function buildFormations() {
         description: lib ? lib.description : '',
         confidence: m.confidence,
         upsidePct: m.upsidePct,
-        detail: m.detail
+        detail: m.detail,
+        context
       });
     }
   }
@@ -230,6 +258,77 @@ async function buildFormations() {
     stats,
     count: results.length,
     results
+  };
+}
+
+/**
+ * AI dogrulama sonuclarini formasyon listesine isler.
+ *  - approve : degerler korunur, AI yorumu eklenir
+ *  - adjust  : upsidePct / confidence AI degerleriyle guncellenir
+ *  - reject  : formasyon listeden cikarilir
+ */
+function mergeValidations(base, validations) {
+  if (!validations || !validations.length) {
+    return { ...base, aiValidated: false };
+  }
+
+  const keyOf = (f) => f.symbol + '|' + (f.patternName || f.pattern);
+  const byKey = new Map(validations.map((v) => [
+    String(v.symbol || '').toUpperCase() + '|' + String(v.pattern || ''),
+    v
+  ]));
+
+  const kept = [];
+  let approved = 0;
+  let adjusted = 0;
+  let rejected = 0;
+
+  for (const f of base.results) {
+    const v = byKey.get(keyOf(f));
+    if (!v) {
+      // AI bu formasyonu degerlendirmemis: aynen koru
+      kept.push(publicFormation(f));
+      continue;
+    }
+    const verdict = String(v.verdict || '').toLowerCase();
+    if (verdict === 'reject') {
+      rejected++;
+      continue;
+    }
+    const out = Object.assign(publicFormation(f), {
+      aiVerdict: verdict || 'approve',
+      aiComment: v.comment || ''
+    });
+    if (verdict === 'adjust') {
+      if (v.adjustedUpsidePct != null && isFinite(Number(v.adjustedUpsidePct))) {
+        out.origUpsidePct = f.upsidePct;
+        out.upsidePct = round(Math.max(1, Math.min(45, Number(v.adjustedUpsidePct))), 1);
+      }
+      if (v.adjustedConfidence != null && isFinite(Number(v.adjustedConfidence))) {
+        out.origConfidence = f.confidence;
+        out.confidence = Math.max(10, Math.min(95, Math.round(Number(v.adjustedConfidence))));
+      }
+      adjusted++;
+    } else {
+      approved++;
+    }
+    kept.push(out);
+  }
+
+  kept.sort((a, b) => b.confidence - a.confidence || b.upsidePct - a.upsidePct);
+
+  return {
+    updatedAt: Date.now(),
+    stats: base.stats,
+    count: kept.length,
+    aiValidated: true,
+    aiSummary: {
+      approved,
+      adjusted,
+      rejected,
+      scanned: base.results.length
+    },
+    results: kept
   };
 }
 
@@ -256,6 +355,31 @@ async function handleApi(req, res, urlObj) {
       data = await dedupe('formations', () => buildFormations().then((v) =>
         cacheSet('formations', v, 15 * 60 * 1000)
       ));
+    }
+    // context (AI icin fiyat serisi) istemciye gonderilmez.
+    return sendJson(res, 200, {
+      ...data,
+      results: (data.results || []).map(publicFormation)
+    });
+  }
+
+  if (p === '/api/ai-formations') {
+    // Kural-tabanli formasyon taramasi + AI dogrulamasu/torpilemesi.
+    let data = cacheGet('ai:formations');
+    if (!data) {
+      try {
+        const base = await dedupe('formations', () => buildFormations().then((v) =>
+          cacheSet('formations', v, 15 * 60 * 1000)
+        ));
+        const { validations } = await ai.validateFormations(base.results);
+        data = mergeValidations(base, validations);
+        cacheSet('ai:formations', data, 30 * 60 * 1000); // 30 dk onbellek
+      } catch (e) {
+        return sendJson(res, 502, {
+          error: 'AI formasyon dogrulamasi alinamadi',
+          detail: String((e && e.message) || e)
+        });
+      }
     }
     return sendJson(res, 200, data);
   }

@@ -1,1 +1,0 @@
-klasörün içinden terminali aç ve oraya önce "npm start" yazıp dene. BIST100 Analyst calisiyor yazar ise oldu demektir. eğer olmaz ise "node server.js" yaz o zaman çalışır.

@@ -29,6 +29,33 @@ from email.utils import parsedate_to_datetime
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PUBLIC_DIR = os.path.join(BASE_DIR, "public")
 BIST_FILE = os.path.join(BASE_DIR, "data", "bist100.js")
+
+
+def _load_env_file(path=None):
+    """Proje kokundeki .env dosyasini yukler (harici bagimlilik yok).
+
+    Zaten tanimli ortam degiskenlerini EZMEZ; .env yoksa sessizce gecer.
+    """
+    if path is None:
+        path = os.path.join(BASE_DIR, ".env")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
+_load_env_file()
+
 PORT = int(os.environ.get("PORT", "3000"))
 
 
@@ -415,14 +442,12 @@ def cache_set(key, value, ttl):
 
 
 # ------------------------------------------------------------------ #
-#  AI Analiz (NVIDIA NIM / DeepSeek)
+#  AI Analiz (NVIDIA NIM)
 # ------------------------------------------------------------------ #
 
 AI_API_KEY = os.environ.get('AI_API_KEY', 'DEV_ONLY_PLACEHOLDER')
-AI_API_BASE = os.environ.get('AI_API_BASE', 'https://evren-llmapi.ssyz.org.tr/v1/chat/completions')
-AI_MODEL = 'deepseek-v4.1-flash'
-TERMS_BASE = 'https://evren-llmapi.ssyz.org.tr/v1'
-_terms_accepted = False
+AI_API_BASE = os.environ.get('AI_API_BASE', 'https://integrate.api.nvidia.com/v1/chat/completions')
+AI_MODEL = os.environ.get('AI_MODEL', 'nvidia/nemotron-3.5-super-vl-120b-a12b')
 
 
 def http_post_json(url, body, timeout=90):
@@ -451,37 +476,16 @@ def http_post_json(url, body, timeout=90):
 
 def _extract_text(j):
     try:
-        return j['choices'][0]['message']['content']
+        msg = j['choices'][0]['message']
     except Exception:
         return 'AI yorumu olusturulamadi (gecersiz yanit).'
-
-
-def accept_terms():
-    global _terms_accepted
-    if _terms_accepted:
-        return
-    try:
-        import urllib.request
-        import urllib.error
-        req = urllib.request.Request(
-            TERMS_BASE + '/terms/accept',
-            data=json.dumps({'version': 1}).encode('utf-8'),
-            headers={
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + AI_API_KEY,
-                'Accept': 'application/json',
-                'User-Agent': 'BIST100-Analyst-Python/1.0'
-            },
-            method='POST'
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                resp.read()
-        except urllib.error.HTTPError:
-            pass  # Zaten kabul edilmis olabilir
-        _terms_accepted = True
-    except Exception:
-        _terms_accepted = True
+    # Nemotron bir "reasoning" modelidir; token butcesi tukenirse
+    # asil cevap (content) None olabilir. Bu durumda reasoning_content'e dus.
+    if msg.get('content'):
+        return msg['content']
+    if msg.get('reasoning_content'):
+        return msg['reasoning_content']
+    return 'AI yorumu olusturulamadi (bos yanit).'
 
 
 def _build_stock_prompt(stock, candles, news_items, pattern):
@@ -539,7 +543,6 @@ def _build_market_prompt(overview_items, news_items):
 
 
 def ai_analyze_market(overview_items, news_items):
-    accept_terms()
     prompt = _build_market_prompt(overview_items, news_items)
     j = http_post_json(AI_API_BASE, {
         'model': AI_MODEL,
@@ -548,7 +551,7 @@ def ai_analyze_market(overview_items, news_items):
             {'role': 'user', 'content': prompt}
         ],
         'temperature': 0.4,
-        'max_tokens': 900,
+        'max_tokens': 3000,
         'stream': False
     })
     summary = _extract_text(j)
@@ -556,7 +559,6 @@ def ai_analyze_market(overview_items, news_items):
 
 
 def ai_analyze_stock(symbol, candles, news_items, pattern=None):
-    accept_terms()
     st = BY_SYMBOL.get(symbol)
     if not st:
         raise ValueError('Bilinmeyen sembol: ' + symbol)
@@ -589,10 +591,151 @@ def ai_analyze_stock(symbol, candles, news_items, pattern=None):
             {'role': 'user', 'content': prompt}
         ],
         'temperature': 0.4,
-        'max_tokens': 700,
+        'max_tokens': 3000,
         'stream': False
     })
     return _extract_text(j)
+
+
+def validate_formations_ai(formations):
+    """Kural-tabanli formasyon sonuclarini AI ile dogrular/torpuler."""
+    if not formations:
+        return []
+
+    rows = []
+    for f in formations[:40]:
+        rows.append({
+            'symbol': f.get('symbol'),
+            'pattern': f.get('patternName') or f.get('pattern'),
+            'lastPrice': f.get('lastClose'),
+            'upsidePct': f.get('upsidePct'),
+            'confidence': f.get('confidence'),
+            'eta': f.get('eta', ''),
+            'detail': (f.get('detail') or '')[:200]
+        })
+
+    sys_prompt = (
+        'Sen BIST100 uzmani bir teknik analiz dogrulayicisin. '
+        'Sana kural-tabanli tarama motorunun buldugu boga formasyonlari verilecek. '
+        'Gorevin: (1) mantikli olmayan / absurt hedefleri dusurmek veya duzeltmek, '
+        'kural olarak gercekci yukselis potansiyeli aylik %1-%35 arasidir, '
+        'ustunde kalan degerleri bu banda ke; (2) yalnizca serideki dip-direnc '
+        'yapisi ile uyumlu formasyonlari onaylamak, zayif olanlari reddetmek; '
+        '(3) confidence degerini 20-90 bandina torpulemek. '
+        'SADECE su formatta JSON dondur, baska metin yazma:\n'
+        '{"validations":[{"symbol":"...","pattern":"...","verdict":"approve|adjust|reject",'
+        '"adjustedUpsidePct":12.5,"adjustedConfidence":65,"comment":"kisa Turkce gerekce"}]}'
+    )
+    user_prompt = ('Formasyon tarama sonuclari:\n' +
+                   json.dumps(rows, ensure_ascii=False) +
+                   '\n\nHer formasyonu degerlendir ve yalnizca JSON dondur.')
+
+    j = http_post_json(AI_API_BASE, {
+        'model': AI_MODEL,
+        'messages': [
+            {'role': 'system', 'content': sys_prompt},
+            {'role': 'user', 'content': user_prompt}
+        ],
+        'temperature': 0.2,
+        'max_tokens': 8000,
+        'stream': False
+    })
+    raw = _extract_text(j)
+    parsed = _parse_json_loose(raw)
+    if parsed and isinstance(parsed.get('validations'), list):
+        return parsed['validations']
+    return []
+
+
+def _parse_json_loose(text):
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    m = re.search(r'```(?:json)?\s*([\s\S]*?)```', text, re.IGNORECASE)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            pass
+    b = text.find('{')
+    e = text.rfind('}')
+    if b != -1 and e > b:
+        try:
+            return json.loads(text[b:e + 1])
+        except Exception:
+            pass
+    return None
+
+
+def merge_validations(base, validations):
+    """AI dogrulama sonuclarini formasyon listesine isler."""
+    if not validations:
+        out = dict(base)
+        out['aiValidated'] = False
+        return out
+
+    by_key = {}
+    for v in validations:
+        k = (str(v.get('symbol') or '').upper() + '|' + str(v.get('pattern') or ''))
+        by_key[k] = v
+
+    kept = []
+    approved = 0
+    adjusted = 0
+    rejected = 0
+
+    for f in base.get('results', []):
+        key = (str(f.get('symbol') or '').upper() + '|' +
+               str(f.get('patternName') or f.get('pattern') or ''))
+        v = by_key.get(key)
+        if not v:
+            kept.append(f)
+            continue
+        verdict = str(v.get('verdict') or '').lower()
+        if verdict == 'reject':
+            rejected += 1
+            continue
+        out = dict(f)
+        out['aiVerdict'] = verdict or 'approve'
+        out['aiComment'] = v.get('comment') or ''
+        if verdict == 'adjust':
+            adj_up = v.get('adjustedUpsidePct')
+            adj_conf = v.get('adjustedConfidence')
+            if adj_up is not None:
+                try:
+                    out['origUpsidePct'] = f.get('upsidePct')
+                    out['upsidePct'] = max(1.0, min(45.0, float(adj_up)))
+                except (TypeError, ValueError):
+                    pass
+            if adj_conf is not None:
+                try:
+                    out['origConfidence'] = f.get('confidence')
+                    out['confidence'] = max(10, min(95, int(round(float(adj_conf)))))
+                except (TypeError, ValueError):
+                    pass
+            adjusted += 1
+        else:
+            approved += 1
+        kept.append(out)
+
+    kept.sort(key=lambda r: (-(r.get('confidence') or 0), -(r.get('upsidePct') or 0)))
+
+    return {
+        'updatedAt': int(time.time() * 1000),
+        'stats': base.get('stats'),
+        'count': len(kept),
+        'aiValidated': True,
+        'aiSummary': {
+            'approved': approved,
+            'adjusted': adjusted,
+            'rejected': rejected,
+            'scanned': len(base.get('results', []))
+        },
+        'results': kept
+    }
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -691,6 +834,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     })
                 except Exception as e:
                     return self._send_json(502, {"error": "AI hisse analizi alinamadi", "detail": str(e)})
+
+            if path == "/api/ai-formations":
+                try:
+                    base = cache_get("formations")
+                    if base is None:
+                        base = cache_set("formations", build_formations(), 900)
+                    vals = validate_formations_ai(base.get("results", []))
+                    result = merge_validations(base, vals)
+                    cache_set("ai:formations", result, 1800)
+                    return self._send_json(200, result)
+                except Exception as e:
+                    return self._send_json(502, {"error": "AI formasyon dogrulamasi alinamadi", "detail": str(e)})
 
             return self._send_json(404, {"error": "Bulunamadi"})
         except Exception as e:
