@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <!-- Koyu lacivert arkaplan (transparan kullanım için iki versiyon: arka planlı ve arka plansız) -->
+  <rect width="128" height="128" rx="24" fill="#0B0E13"/>
+  
+  <!-- Mum grafiği / trend çizgisi elemanları (flat, gölgesiz) -->
+  
+  <!-- Kırmızı / düşüş mum 1 -->
+  <rect x="20" y="74" width="10" height="16" fill="#FF5C6C"/>
+  <rect x="24" y="62" width="2" height="12" fill="#FF5C6C"/>
+  
+  <!-- Yeşil / artış mum 2 -->
+  <rect x="38" y="56" width="10" height="24" fill="#1FD286"/>
+  <rect x="42" y="46" width="2" height="10" fill="#1FD286"/>
+  
+  <!-- Yeşil / artış mum 3 (en son, yüksek) -->
+  <rect x="56" y="38" width="10" height="42" fill="#1FD286"/>
+  <rect x="60" y="28" width="2" height="10" fill="#1FD286"/>
+  
+  <!-- Elektrik mavi yukarı yönlü trend çizgisi -->
+  <path d="M 26 90 L 50 62 L 74 34" stroke="#4F9DFF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  
+  <!-- Nokta / finit işaret -->
+  <circle cx="74" cy="34" r="4" fill="#4F9DFF"/>
+</svg>

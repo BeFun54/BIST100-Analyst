@@ -44,7 +44,7 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 }
 
 .brand { display: flex; align-items: center; gap: 12px; }
-.brand .logo { font-size: 28px; }
+.brand .logo-img { width: 28px; height: 28px; display: block; }
 .brand h1 { font-size: 18px; letter-spacing: .3px; }
 .tagline { color: var(--muted); font-size: 12px; }
 
