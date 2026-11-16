@@ -450,6 +450,46 @@ AI_API_BASE = os.environ.get('AI_API_BASE', 'https://integrate.api.nvidia.com/v1
 AI_MODEL = os.environ.get('AI_MODEL', 'nvidia/nemotron-3.5-super-vl-120b-a12b')
 
 
+def ai_public_config():
+    """Arayuze donen genel ayar durumu; API anahtari asla gosterilmez."""
+    return {
+        'configured': bool(AI_API_KEY and AI_API_KEY != 'DEV_ONLY_PLACEHOLDER'
+                           and str(AI_API_KEY).strip()),
+        'apiBase': AI_API_BASE,
+        'model': AI_MODEL,
+    }
+
+
+def ai_set_config(api_key, api_base=None, model=None):
+    """Calisma aninda AI ayarlarini gunceller (sadece bu surec icin gecerli)."""
+    global AI_API_KEY, AI_API_BASE, AI_MODEL
+    if not api_key or not str(api_key).strip():
+        raise ValueError('API anahtari bos olamaz')
+    AI_API_KEY = str(api_key).strip()
+    if api_base:
+        AI_API_BASE = str(api_base).strip()
+    if model:
+        AI_MODEL = str(model).strip()
+    os.environ['AI_API_KEY'] = AI_API_KEY
+    if api_base:
+        os.environ['AI_API_BASE'] = AI_API_BASE
+    if model:
+        os.environ['AI_MODEL'] = AI_MODEL
+    return ai_public_config()
+
+
+def ai_test_connection():
+    """AI sunucusuna minimum bir completions istegi ile baglanti testi."""
+    j = http_post_json(AI_API_BASE, {
+        'model': AI_MODEL,
+        'messages': [{'role': 'user', 'content': 'Merhaba'}],
+        'temperature': 0.2,
+        'max_tokens': 1,
+        'stream': False
+    }, timeout=20)
+    return {'ok': True}
+
+
 def http_post_json(url, body, timeout=90):
     data = json.dumps(body).encode('utf-8')
     req = urllib.request.Request(
@@ -738,6 +778,20 @@ def merge_validations(base, validations):
     }
 
 
+def build_formations():
+    """Kural-tabanli formasyon tarama (Python fallback - bos doner).
+
+    Gercek formasyon tarama mantigi Node.js sunucuda (lib/patterns.js)
+    bulunur. Python fallback sunucusu icin basit bir stup 제공 eder.
+    """
+    return {
+        'updatedAt': int(time.time() * 1000),
+        'stats': {'scanned': 0, 'withData': 0, 'tooShort': 0, 'perPattern': {}},
+        'count': 0,
+        'results': []
+    }
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=PUBLIC_DIR, **kwargs)
@@ -847,9 +901,36 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 except Exception as e:
                     return self._send_json(502, {"error": "AI formasyon dogrulamasi alinamadi", "detail": str(e)})
 
+            if path == "/api/ai-config":
+                return self._send_json(200, ai_public_config())
+
             return self._send_json(404, {"error": "Bulunamadi"})
         except Exception as e:
             return self._send_json(500, {"error": "Sunucu hatasi", "detail": str(e)})
+
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        if not path.startswith("/api/"):
+            return self._send_json(404, {"error": "Bulunamadi"})
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length) if length else b""
+            data = json.loads(body.decode("utf-8")) if body else {}
+        except Exception:
+            return self._send_json(400, {"error": "Gecersiz istek gövdesi"})
+        try:
+            if path == "/api/ai-config":
+                cfg = ai_set_config(data.get("apiKey"), data.get("apiBase"), data.get("model"))
+                return self._send_json(200, {"ok": True, "config": cfg})
+            if path == "/api/ai-test":
+                result = ai_test_connection()
+                return self._send_json(200, result)
+            return self._send_json(404, {"error": "Bulunamadi"})
+        except ValueError as ve:
+            return self._send_json(400, {"error": str(ve)})
+        except Exception as e:
+            return self._send_json(502, {"error": "AI sunucusuna baglanilamadi", "detail": str(e)})
 
 
 class ThreadingServer(socketserver.ThreadingMixIn, http.server.HTTPServer):

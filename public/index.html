@@ -135,6 +135,7 @@
           <h3>🤖 AI Analiz</h3>
           <span id="aiSub" class="muted">Yapay zeka ile piyasa ve hisse yorumu</span>
         </div>
+        <button id="aiConfigBtn" class="btn btn-small" title="AI ayarlari (api key, model)">⚙️ Ayarlar</button>
         <button id="aiClose" class="btn" title="Kapat">✕</button>
       </div>
       <div class="ai-tabs">
@@ -156,6 +157,62 @@
       </div>
       <div class="ai-disclaimer">
         Bu bir yatirim tavsiyesi degildir. Sadece bilgilendirme amaclidir.
+      </div>
+    </div>
+  </div>
+
+  <!-- AI ayarlari (api key, base url, model) -->
+  <div id="aiConfigModal" class="modal hidden">
+    <div class="modal-box ai-box" style="max-width: 560px; width: 92vw;">
+      <div class="modal-head">
+        <div>
+          <h3>⚙️ AI Ayarları</h3>
+          <span class="muted">API anahtari, sunucu adresi ve model secimi</span>
+        </div>
+        <button id="aiConfigClose" class="btn" title="Kapat">✕</button>
+      </div>
+      <div class="ai-config-body" style="padding: 18px; display: flex; flex-direction: column; gap: 14px;">
+        <div id="aiConfigNotice" class="ai-config-notice" style="display: none;">
+          Api key girilmeden AI ozellikleri kullanilamaz.
+        </div>
+        <label class="ai-config-label">API Anahtari <span class="muted">(orn. nvapi-...)</span></label>
+        <div class="ai-config-input-wrap">
+          <input id="aiConfigKey" type="password" placeholder="API anahtarınızı buraya girin" />
+          <button id="aiConfigKeyToggle" class="btn" type="button" style="padding: 6px 10px; font-size: 12px;">👁️</button>
+        </div>
+        <label class="ai-config-label">Sunucu Adresi (Base URL)</label>
+        <div class="ai-config-row" style="display: flex; gap: 8px; align-items: center;">
+          <select id="aiConfigBasePreset" style="flex: 1;">
+            <option value="https://integrate.api.nvidia.com/v1/chat/completions">NVIDIA NIM (varsayılan)</option>
+            <option value="https://api.openai.com/v1/chat/completions">OpenAI</option>
+            <option value="https://openrouter.ai/api/v1/chat/completions">OpenRouter</option>
+            <option value="https://api.groq.com/openai/v1/chat/completions">Groq</option>
+            <option value="https://api.deepseek.com/chat/completions">DeepSeek</option>
+            <option value="__custom__">Özel adres …</option>
+          </select>
+          <input id="aiConfigBaseUrl" type="url" placeholder="https://api.example.com/v1/chat/completions" value="https://integrate.api.nvidia.com/v1/chat/completions" />
+        </div>
+        <label class="ai-config-label">Model</label>
+        <div class="ai-config-row" style="display: flex; gap: 8px; align-items: center;">
+          <select id="aiConfigModel" style="flex: 1;">
+            <option value="nvidia/nemotron-3.5-super-vl-120b-a12b">nvidia/nemotron-3.5-super-vl-120b-a12b (NVIDIA)</option>
+            <option value="nvidia/llama-3.1-nemotron-70b-instruct">nvidia/llama-3.1-nemotron-70b-instruct (NVIDIA)</option>
+            <option value="gpt-4o">gpt-4o (OpenAI)</option>
+            <option value="gpt-4o-mini">gpt-4o-mini (OpenAI)</option>
+            <option value="gpt-3.5-turbo">gpt-3.5-turbo (OpenAI)</option>
+            <option value="deepseek-chat">deepseek-chat</option>
+            <option value="deepseek-reasoner">deepseek-reasoner</option>
+            <option value="llama-3.1-405b-instruct">llama-3.1-405b-instruct</option>
+            <option value="mixtral-8x7b-32768">mixtral-8x7b-32768 (Groq)</option>
+            <option value="__custom__">Özel model …</option>
+          </select>
+          <input id="aiConfigModelCustom" type="text" placeholder="Model kimliğini girin" disabled />
+        </div>
+        <div class="ai-config-actions" style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px;">
+          <button id="aiConfigTestBtn" class="btn" type="button">Bağlantıyı Test Et</button>
+          <button id="aiConfigSaveBtn" class="btn btn-ai" type="button">Kaydet &amp; Etkinleştir</button>
+        </div>
+        <div id="aiConfigMessage" class="ai-config-message" style="margin-top: 8px;"></div>
       </div>
     </div>
   </div>

@@ -101,6 +101,20 @@ function sendJson(res, status, payload) {
   res.end(body);
 }
 
+/* ISTEK GOVDESI OKUYUCU (JSON POST icin) */
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      if (!raw) return resolve({});
+      try { resolve(JSON.parse(raw)); } catch (e) { reject(new Error('Gecersiz JSON')); }
+    });
+    req.on('error', reject);
+  });
+}
+
 /* ------------------------------------------------------------------ *
  *  API : /api/overview
  *  Tum BIST100 hisseleri icin anlik ozet + haftalik/aylik degisim.
@@ -222,7 +236,7 @@ async function buildFormations() {
     // AI dogrulamasi icin kompakt fiyat baglami (istemciye gonderilmez).
     const w60 = allCloses.slice(-60);
     const context = {
-      series: allCloses.slice(-45).map((c) => round(c, 2)),
+      series: allCloses.slice(-20).map((c) => round(c, 2)),
       high60: round(Math.max.apply(null, w60), 2),
       low60: round(Math.min.apply(null, w60), 2),
       ma50: allCloses.length >= 50 ? round(avg(allCloses.slice(-50)), 2) : null,
@@ -272,11 +286,15 @@ function mergeValidations(base, validations) {
     return { ...base, aiValidated: false };
   }
 
-  const keyOf = (f) => f.symbol + '|' + (f.patternName || f.pattern);
-  const byKey = new Map(validations.map((v) => [
-    String(v.symbol || '').toUpperCase() + '|' + String(v.pattern || ''),
-    v
-  ]));
+  const norm = (s) => String(s || '').toUpperCase().trim();
+  const keyOf = (f) => norm(f.symbol) + '|' + norm(f.patternName || f.pattern);
+  const altKeyOf = (f) => norm(f.symbol) + '|' + norm(f.pattern);
+
+  const byKey = new Map();
+  for (const v of validations) {
+    const k = norm(v.symbol) + '|' + norm(v.pattern);
+    byKey.set(k, v);
+  }
 
   const kept = [];
   let approved = 0;
@@ -284,7 +302,7 @@ function mergeValidations(base, validations) {
   let rejected = 0;
 
   for (const f of base.results) {
-    const v = byKey.get(keyOf(f));
+    let v = byKey.get(keyOf(f)) || byKey.get(altKeyOf(f));
     if (!v) {
       // AI bu formasyonu degerlendirmemis: aynen koru
       kept.push(publicFormation(f));
@@ -536,6 +554,37 @@ async function handleApi(req, res, urlObj) {
       summary,
       updatedAt: Date.now()
     });
+  }
+
+  if (p === '/api/ai-config') {
+    if (req.method === 'GET') {
+      return sendJson(res, 200, ai.getPublicConfig());
+    }
+    if (req.method === 'POST') {
+      let body;
+      try { body = await readBody(req); } catch (e) {
+        return sendJson(res, 400, { error: 'Gecersiz istek gövdesi' });
+      }
+      try {
+        const cfg = ai.setRuntimeConfig(body);
+        return sendJson(res, 200, { ok: true, config: cfg });
+      } catch (e) {
+        return sendJson(res, 400, { error: String((e && e.message) || e) });
+      }
+    }
+    return sendJson(res, 405, { error: 'Yontem desteklemiyor' });
+  }
+
+  if (p === '/api/ai-test' && req.method === 'POST') {
+    try {
+      const result = await ai.testConnection();
+      return sendJson(res, 200, result);
+    } catch (e) {
+      return sendJson(res, 502, {
+        error: 'AI sunucusuna baglanilamadi',
+        detail: String((e && e.message) || e)
+      });
+    }
   }
 
   return sendJson(res, 404, { error: 'Bulunamadi' });

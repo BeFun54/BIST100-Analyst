@@ -26,6 +26,7 @@ const state = {
   favorites: new Set(JSON.parse(localStorage.getItem(FAV_KEY) || '[]')),
   assets: JSON.parse(localStorage.getItem(ASSET_KEY) || '[]'),
   patternResults: [], // son formasyon taramasi sonuclari (varlik beklentisi icin)
+  aiConfig: { configured: false, apiBase: '', model: '' }, // /api/ai-config'den gelen ayar durumu
   openSymbol: null,
   range: '1y',
   favOnly: false,
@@ -1217,6 +1218,21 @@ function patternCard(r) {
   });
   card.appendChild(addBtn);
 
+  // "Varliklarima ekle" yaninda: secili hissenin AI analizini direkt baslatir
+  const aiBtn = el('button', 'pc-ai-btn', '🤖 AI Analiz');
+  aiBtn.title = r.symbol + ' hissesine AI analiz baslat';
+  aiBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const existing = card.querySelector('.pc-add-form');
+    if (existing) {
+      existing.remove();
+      addBtn.classList.remove('active');
+    }
+    addBtn.classList.remove('active');
+    openAIStockAnalysis(r.symbol);
+  });
+  card.appendChild(aiBtn);
+
   card.addEventListener('click', () => {
     closePatternModal();
     openModal(r.symbol);
@@ -1299,6 +1315,125 @@ function closeAIModal() {
   if (modal) modal.classList.add('hidden');
 }
 
+/* Formasyon kartindan direk bir hissenin AI analizini acar ve baslatir. */
+async function openAIStockAnalysis(symbol) {
+  const cfg = await loadAiConfig();
+  if (!cfg || !cfg.configured) {
+    openAiConfigModal();
+    return;
+  }
+  const modal = document.getElementById('aiModal');
+  if (modal) modal.classList.remove('hidden');
+  switchAITab('ai-stock');
+  populateAIStockSelect();
+  const sel = document.getElementById('aiStockSelect');
+  if (sel) sel.value = symbol;
+  loadAIStock(symbol);
+  if (!state.aiMarketSummary) loadAIOverview();
+}
+
+/* ==================================================================
+ *  AI ayarlari (api key, base url, model) - sunucu ile iletisim
+ * ================================================================== */
+
+async function loadAiConfig() {
+  try {
+    const res = await fetch('/api/ai-config', { headers: { Accept: 'application/json' } });
+    if (!res.ok) throw new Error('Sunucu hatasi (kodu ' + res.status + ')');
+    state.aiConfig = await res.json();
+  } catch (e) {
+    state.aiConfig = { configured: false, apiBase: '', model: '', error: e.message };
+  }
+  return state.aiConfig;
+}
+
+async function saveAiConfig(payload) {
+  const res = await fetch('/api/ai-config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Sunucu hatasi (kodu ' + res.status + ')');
+  }
+  return res.json();
+}
+
+async function testAiConnection() {
+  const res = await fetch('/api/ai-test', { method: 'POST', headers: { Accept: 'application/json' } });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || err.error || 'Baglanti testi basarisiz');
+  }
+  return res.json();
+}
+
+function showAiConfigMessage(text, kind) {
+  const elMsg = document.getElementById('aiConfigMessage');
+  if (!elMsg) return;
+  elMsg.textContent = text;
+  elMsg.className = 'ai-config-message ' + (kind === 'ok' ? 'ok' : 'err');
+  elMsg.style.display = 'block';
+}
+function clearAiConfigMessage() {
+  const elMsg = document.getElementById('aiConfigMessage');
+  if (elMsg) { elMsg.style.display = 'none'; elMsg.textContent = ''; }
+}
+
+function openAiConfigModal() {
+  const modal = document.getElementById('aiConfigModal');
+  const notice = document.getElementById('aiConfigNotice');
+  if (modal) modal.classList.remove('hidden');
+  clearAiConfigMessage();
+  const cfg = state.aiConfig || {};
+  const keyInput = document.getElementById('aiConfigKey');
+  if (keyInput) keyInput.value = '';
+  const baseInput = document.getElementById('aiConfigBaseUrl');
+  if (baseInput) baseInput.value = cfg.apiBase || 'https://integrate.api.nvidia.com/v1/chat/completions';
+  const preset = document.getElementById('aiConfigBasePreset');
+  if (preset) {
+    preset.value = cfg.apiBase || 'https://integrate.api.nvidia.com/v1/chat/completions';
+    if ([...preset.options].every((o) => o.value !== preset.value)) preset.value = '__custom__';
+  }
+  const modelSel = document.getElementById('aiConfigModel');
+  if (modelSel) {
+    modelSel.value = cfg.model || 'nvidia/nemotron-3.5-super-vl-120b-a12b';
+    if ([...modelSel.options].every((o) => o.value !== modelSel.value)) modelSel.value = '__custom__';
+  }
+  const modelCustom = document.getElementById('aiConfigModelCustom');
+  if (modelCustom) {
+    if (modelSel && modelSel.value === '__custom__') {
+      modelCustom.disabled = false;
+      modelCustom.value = cfg.model || '';
+    } else { modelCustom.disabled = true; modelCustom.value = ''; }
+  }
+  if (notice) notice.style.display = 'none';
+}
+
+function closeAiConfigModal() {
+  const modal = document.getElementById('aiConfigModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+/* AI analizi acilmeden once: api key var mi? yoksa ayar ekranini acar. */
+async function openAIModal() {
+  await loadAiConfig();
+  if (!state.aiConfig || !state.aiConfig.configured) {
+    const notice = document.getElementById('aiConfigNotice');
+    if (notice) {
+      notice.style.display = 'block';
+      notice.textContent = 'Api key girilmeden AI ozellikleri kullanilamaz.';
+    }
+    openAiConfigModal();
+    return;
+  }
+  const modal = document.getElementById('aiModal');
+  if (modal) modal.classList.remove('hidden');
+  if (!state.aiMarketSummary) loadAIOverview();
+  populateAIStockSelect();
+}
+
 async function loadAIOverview() {
   const content = document.getElementById('ai-market-content');
   const loading = document.querySelector('#ai-market .ai-loading');
@@ -1378,6 +1513,9 @@ function switchAITab(tabId) {
 function init() {
   updateFavCount();
 
+  // AI ayar durumunu kontrol et (api key / sunucu baglanti durumu)
+  loadAiConfig();
+
   const search = document.getElementById('search');
   search.addEventListener('input', () => {
     state.search = search.value;
@@ -1431,6 +1569,89 @@ function init() {
   document.getElementById('aiModal').addEventListener('click', (e) => {
     if (e.target.id === 'aiModal') closeAIModal();
   });
+  document.getElementById('aiConfigBtn').addEventListener('click', openAiConfigModal);
+
+  // AI ayarlari modal
+  document.getElementById('aiConfigClose').addEventListener('click', closeAiConfigModal);
+  document.getElementById('aiConfigModal').addEventListener('click', (e) => {
+    if (e.target.id === 'aiConfigModal') closeAiConfigModal();
+  });
+
+  // Sifre gostern/gizleyen buton
+  document.getElementById('aiConfigKeyToggle').addEventListener('click', function () {
+    const inp = document.getElementById('aiConfigKey');
+    if (inp.type === 'password') { inp.type = 'text'; this.textContent = '🙈'; }
+    else { inp.type = 'password'; this.textContent = '👁️'; }
+  });
+
+  // Base URL preset secimi
+  document.getElementById('aiConfigBasePreset').addEventListener('change', function () {
+    const urlInput = document.getElementById('aiConfigBaseUrl');
+    if (this.value === '__custom__') {
+      urlInput.disabled = false;
+      urlInput.focus();
+    } else {
+      urlInput.value = this.value;
+      urlInput.disabled = false;
+    }
+  });
+
+  // Model secimi: secilmeli model ise ozel inputu ac
+  document.getElementById('aiConfigModel').addEventListener('change', function () {
+    const custom = document.getElementById('aiConfigModelCustom');
+    if (this.value === '__custom__') { custom.disabled = false; custom.focus(); }
+    else { custom.disabled = true; custom.value = ''; }
+  });
+
+  // Baglanti testi
+  document.getElementById('aiConfigTestBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('aiConfigTestBtn');
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Test ediliyor…';
+    clearAiConfigMessage();
+    try {
+      await testAiConnection();
+      showAiConfigMessage('AI sunucusuna baglanti basarili.', 'ok');
+    } catch (e) {
+      showAiConfigMessage('Baglanti hatasi: ' + e.message, 'err');
+    } finally {
+      btn.disabled = false; btn.textContent = orig;
+    }
+  });
+
+  // Kaydet & etkinlestir
+  document.getElementById('aiConfigSaveBtn').addEventListener('click', async () => {
+    const key = document.getElementById('aiConfigKey').value.trim();
+    const preset = document.getElementById('aiConfigBasePreset');
+    let base = document.getElementById('aiConfigBaseUrl').value.trim();
+    const modelSel = document.getElementById('aiConfigModel');
+    let model = modelSel.value;
+    if (model === '__custom__') model = document.getElementById('aiConfigModelCustom').value.trim();
+    if (!key) { showAiConfigMessage('API anahtari girilmesi zorunludur.', 'err'); return; }
+    if (!base) { showAiConfigMessage('Sunucu adresi girilmesi zorunludur.', 'err'); return; }
+    if (preset.value !== '__custom__') base = preset.value;
+    if (!model) { showAiConfigMessage('Model secilmelidir.', 'err'); return; }
+
+    const btn = document.getElementById('aiConfigSaveBtn');
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Kaydediliyor…';
+    clearAiConfigMessage();
+    try {
+      await saveAiConfig({ apiKey: key, apiBase: base, model: model });
+      await loadAiConfig();
+      showAiConfigMessage('Ayarlar kaydedildi. Baglanti test ediliyor…', 'ok');
+      try {
+        await testAiConnection();
+        showAiConfigMessage('AI sunucusuna baglanti basarili. AI analiz artik kullanilabilir.', 'ok');
+      } catch (e) {
+        showAiConfigMessage('Kaydedildi ama baglanti hatasi: ' + e.message, 'err');
+      }
+    } catch (e) {
+      showAiConfigMessage('Kayit basarisiz: ' + e.message, 'err');
+    } finally {
+      btn.disabled = false; btn.textContent = orig;
+    }
+  });
 
   // AI sekmeleri
   document.querySelectorAll('.ai-tab').forEach((tab) => {
@@ -1455,6 +1676,7 @@ function init() {
       closePatternModal();
       closeAssetsModal();
       closeAIModal();
+      closeAiConfigModal();
     }
   });
 
@@ -1462,7 +1684,8 @@ function init() {
   loadNews(null);
 
   // Sayfa yuklendiginde/yenilendiginde otomatik AI piyasa analizi (arkaplan)
-  loadAIOverview();
+  // Sadece API anahtari girilmisse calistirilir.
+  if (state.aiConfig && state.aiConfig.configured) loadAIOverview();
 
   // Anlik guncelleme: her 60 saniyede bir fiyatlari yenile
   setInterval(() => {

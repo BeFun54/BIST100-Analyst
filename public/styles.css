@@ -679,6 +679,20 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 }
 .pc-add-btn:hover, .pc-add-btn.active { background: rgba(80, 160, 255, .14); }
 
+.pc-ai-btn {
+  margin-top: 8px;
+  margin-left: 6px;
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 7px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pc-ai-btn:hover { background: rgba(79, 157, 255, .12); }
+
 .pc-add-form {
   margin-top: 8px;
   display: flex;
@@ -832,4 +846,83 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
   background: var(--panel-2);
   text-align: center;
   font-style: italic;
+}
+
+/* ---------------- AI Ayarlar Modal ---------------- */
+
+.ai-config-label {
+  display: block;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.ai-config-input-wrap {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ai-config-input-wrap input {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  width: 100%;
+  outline: none;
+}
+.ai-config-input-wrap input:focus { border-color: var(--accent); }
+
+.ai-config-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ai-config-row select {
+  flex: 1;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  outline: none;
+}
+.ai-config-row select:focus { border-color: var(--accent); }
+.ai-config-row input[disabled] { background: #1c2330; color: var(--muted); }
+
+.ai-config-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.ai-config-message {
+  font-size: 12.5px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+.ai-config-message.ok {
+  color: var(--up);
+  background: rgba(31, 210, 134, .1);
+  border-color: rgba(31, 210, 134, .25);
+}
+.ai-config-message.err {
+  color: var(--down);
+  background: rgba(255, 92, 108, .1);
+  border-color: rgba(255, 92, 108, .25);
+}
+
+.ai-config-notice {
+  font-size: 13px;
+  color: var(--down);
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255, 92, 108, .1);
+  border: 1px solid rgba(255, 92, 108, .25);
 }
