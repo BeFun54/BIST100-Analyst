@@ -1002,9 +1002,9 @@ async function renderGold() {
     wrap.appendChild(goldRow('Gram Altin', data.gram, ' TL'));
     wrap.appendChild(goldRow('Ceyrek Altin', data.ceyrek, ' TL'));
     wrap.appendChild(goldRow('Tam Altin', data.tam, ' TL'));
-    wrap.appendChild(goldRow('Ons Altin', data.ons, ' TL'));
+    wrap.appendChild(goldRow('Ons Altin', data.onsTry, ' TL'));
     wrap.appendChild(el('div', 'gold-sub',
-      'Kaynak: haremaltin.com  ·  Guncelleme: ' +
+      'Kaynak: Yahoo Finance (GC=F, TRY=X) · Hesaplanan degerler · Kesin fiyat degildir, yerel fiyatlardan farkli olabilir · ' +
       new Date(data.updatedAt).toLocaleTimeString('tr-TR')));
   } catch (e) {
     wrap.innerHTML = '<div class="gold-error">Altin verisi yuklenemedi</div>';
