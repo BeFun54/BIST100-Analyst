@@ -1,8 +1,8 @@
 # BIST100 Analyst
 
 BIST100 hisselerini canli olarak izleyebileceginiz, klasik mum (candlestick)
-grafikleri, son 7 gunun haberleri ve yapay zeka destekli teknik analizleri tek
-ekranda birlestiren web uygulamasi.
+grafikleri, son 7 gunun haberleri, altin fiyatlari ve yapay zeka destekli
+teknik analizleri tek ekranda birlestiren web uygulamasi.
 
 ## Ozellikler
 
@@ -22,7 +22,21 @@ ekranda birlestiren web uygulamasi.
   tek tikla sadece favorileri gorun (tarayici hafizasinda saklanir).
 - **AI Analiz (NVIDIA NIM)**: tek hisse ve genel piyasa icin Turkce teknik ve
   temel analiz; kural-tabanli formasyon taramalarinin Nemotron modeli ile
-  dogrulanmasi.
+  dogrulanmasi. AI sunucu adresi, modeli ve API anahtari tarayici uzerinden
+  ayarlanabilir ve test edilebilir (`/api/ai-config`, `/api/ai-test`).
+
+## Altin Fiyatlari (`/api/gold`) — Yeni
+
+Sol panelin **Altin** kismininda guncecelik altin fiyatlari gosterilir:
+
+- **Gram Altin**, **Ceyrek Altin**, **Tam Altin**, **Ons Altin** (TL cinsinden)
+- Veri kaynagi: Yahoo Finance `GC=F` (ons/USD) ve `TRY=X` (USD/TRY)
+- 1 ons = 31.1034768 gram ile hesaplanir; ceyrek = 1.75 g, tam = 7 g
+- Yerel sarfiyat fiyatlarindan (haremaltin.com vb.) farkli olabilir;
+  kesin alis/satis fasi degildir
+- Sunucu tarafinda **5 dakika** onbelleklenir
+
+API: `GET /api/gold` (5 dk onbellekli)
 
 ## Hizli baslangic
 
@@ -85,16 +99,34 @@ AI_MODEL=nvidia/nemotron-3.5-super-vl-120b-a12b
 | Endpoint | Aciklama | Onbellek |
 |---|---|---|
 | `GET /api/overview` | Tum BIST100 ozet verisi | 60 sn |
-| `GET /api/formations` | Boga formasyonlari | 15 dk |
+| `GET /api/formations` | Boga (yukselis) formasyonlari | 15 dk |
 | `GET /api/ai-formations` | Formasyon + AI dogrulama | 30 dk |
+| `GET /api/gold` | Altin fiyati (gram/ceyrek/tam/ons) | 5 dk |
 | `GET /api/chart?symbol=X&range=1y` | Mum grafiği | 5 dk |
 | `GET /api/news?q=...` | Google Haberler | 10 dk |
 | `GET /api/ai-analysis` | Piyasa yorumu | 10 dk |
 | `GET /api/ai-analysis-stock?symbol=X` | Tek hisse yorumu | — |
+| `GET /api/ai-config` | AI ayarlarini getir (genel) | — |
+| `POST /api/ai-config` | AI ayarlarini kaydet (anahtar, base URL, model) | — |
+| `POST /api/ai-test` | AI baglantisini test et | — |
+
+## Ek / yenilenmis ozellikler
+
+- **Altin takibi**: `GC=F` ve `TRY=X` üzerinden gram/ceyrek/tam/ons altin
+  fiyatlari, sol panelde ayrı bir kartta.
+- **Varliklarim (portfoy)**: `💼 Varlıklarım` butonuyla hisse, adet, alis
+  fiyati ve tarih kaydedilebilir; veriler tarayici hafizasinda (localStorage)
+  saklanir ve formasyon taramasi ile tahmini satis hedefi karsilastirilir.
+- **Dusush formasyonlari**: Yukselis ile beraber dustugu icin de tarama
+  yapilir; bullish ve bearish sonuclari yan yana ve AI karsilastirmasi ile
+  sunulur.
+- **Calisma aninda AI ayari**: API anahtari, base URL ve model secenegi
+  tarayici uzerinden degistirilebilir ve `Bağlantıyı Test Et` ile dogrulanir.
 
 ## Veri kaynaklari
 
 - **Fiyat / grafik verisi**: Yahoo Finance (BIST sembolleri `.IS` uzantisi ile).
+- **Altin fiyati**: Yahoo Finance `GC=F` (altin ons/USD) + `TRY=X` (USD/TRY).
 - **Haberler**: Google Haberler RSS (Turkce).
 - **AI**: NVIDIA NIM (OpenAI uyumlu `/v1/chat/completions`),
   `nvidia/nemotron-3.5-super-vl-120b-a12b`.
@@ -111,12 +143,12 @@ lib/env.js           Bagimliliksiz .env yukleyici (Node)
 lib/ai.js            AI istemcisi (NVIDIA NIM / Nemotron)
 lib/yahoo.js         Yahoo Finance istemcisi (crumb/cerez, spark, quote, chart)
 lib/news.js          Google Haberler RSS istemcisi
-lib/patterns.js      Klasik boga formasyonu tespit motoru
+lib/patterns.js      Klasik formasyon tespit motoru (yukselis + dustug)
 lib/patterns.py      Python karsiligi (formasyon motoru)
 data/bist100.js      BIST100 sembol listesi (Turkce adlarla) - tek kaynak
 public/index.html    Arayuz iskeleti
 public/styles.css    Karanlik tema stilleri
-public/app.js        Istemci mantigi + canvas mum grafigi
+public/app.js        Istemci mantigi + canvas mum grafigi + altin/varlik/ai-ayari
 ```
 
 Her iki sunucu da `data/bist100.js` dosyasini tek kaynak olarak okur;
