@@ -1182,30 +1182,45 @@ function renderPatternList(data, base) {
     }
   }
 
-  state.patternResults = [...(bull.results || []), ...(bear.results || [])];
+  // Sadece AI'nin sonuca vardigi (degerlendirdigi) hisseleri goruntule.
+  const bullResults = (bull.results || []).filter((r) => r.aiVerdict);
+  const bearResults = (bear.results || []).filter((r) => r.aiVerdict);
+
+  state.patternResults = [...bullResults, ...bearResults];
   listEl.innerHTML = '';
 
-  if (bull.results && bull.results.length) {
-    listEl.appendChild(el('div', 'pattern-section', '📈 Yükseliş Beklenen (' + bull.count + ')'));
-    for (const r of bull.results) listEl.appendChild(patternCard(r));
+  subEl.textContent = 'BIST100 · ' +
+    (bStats.scanned || 0) + ' hisse tarandı · ' +
+    bullResults.length + ' onaylı yükseliş · ' + bearResults.length + ' onaylı düşüş sinyali';
+
+  if (bullResults.length) {
+    listEl.appendChild(el('div', 'pattern-section', '📈 Yükseliş Beklenen (AI Onaylı) (' + bullResults.length + ')'));
+    for (const r of bullResults) listEl.appendChild(patternCard(r));
   } else {
-    listEl.appendChild(el('div', 'pattern-empty', '📈 Yükseliş sinyali bulunamadı.'));
+    listEl.appendChild(el('div', 'pattern-empty', '📈 AI tarafından onaylanan yükseliş sinyali bulunamadı.'));
   }
 
-  if (bear.results && bear.results.length) {
-    listEl.appendChild(el('div', 'pattern-section', '📉 Düşüş Beklenen (' + bear.count + ')'));
-    for (const r of bear.results) listEl.appendChild(patternCard(r));
+  if (bearResults.length) {
+    listEl.appendChild(el('div', 'pattern-section', '📉 Düşüş Beklenen (AI Onaylı) (' + bearResults.length + ')'));
+    for (const r of bearResults) listEl.appendChild(patternCard(r));
   } else {
-    listEl.appendChild(el('div', 'pattern-empty', '📉 Düşüş sinyali bulunamadı.'));
+    listEl.appendChild(el('div', 'pattern-empty', '📉 AI tarafından onaylanan düşüş sinyali bulunamadı.'));
   }
 }
 
 /** Formasyon alt basligini uretir; aiState verilirse sonuna eklenir. */
 function patternSubtitle(data, aiState) {
   const st = data.stats || {};
-  let s = 'BIST100 · ' + (st.scanned || data.scanned || 0) + ' hisse tarandı · ' +
-    (st.withData != null ? st.withData + ' hissede yeterli veri · ' : '') +
-    (data.count != null ? data.count : (data.results || []).length) + ' yükseliş sinyali';
+  let s;
+  if (data.dir === 'all') {
+    s = 'BIST100 · ' + (data.scanned || 0) + ' hisse tarandı · ' +
+      (st.withData != null ? st.withData + ' hissede yeterli veri · ' : '') +
+      'çift yönlü tarama';
+  } else {
+    s = 'BIST100 · ' + (st.scanned || data.scanned || 0) + ' hisse tarandı · ' +
+      (st.withData != null ? st.withData + ' hissede yeterli veri · ' : '') +
+      (data.count != null ? data.count : (data.results || []).length) + ' yükseliş sinyali';
+  }
   if (aiState) s += ' · ' + aiState;
   return s;
 }

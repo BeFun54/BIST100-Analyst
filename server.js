@@ -258,7 +258,6 @@ async function buildFormations(dir = 'bullish') {
     spark = {};
   }
 
-  const results = [];
   const stats = {
     scanned: BIST100.length,
     withData: 0,
@@ -268,31 +267,22 @@ async function buildFormations(dir = 'bullish') {
   const scanBullish = dir === 'bullish' || dir === 'all';
   const scanBearish = dir === 'bearish' || dir === 'all';
 
-  /** Tek bir formasyon eslesmesini sonuca ekler (yon duyarlı). */
+  // Per stock, per direction: en iyi (yuksek confidence) eslesmeyi tut.
+  const bestByStockDir = new Map(); // key: symbol|direction -> {stock, m, direction, lastClose, context}
+  const stockBullish = new Set();
+  const stockBearish = new Set();
+
   const pushResult = (stock, m, direction, lastClose, context) => {
-    const lib = PATTERN_LIBRARY[m.key];
-    // upsidePct = beklenen hareketin büyüklüğü (pozitif), isaret direction'dan belli olur.
-    const expectedPct = direction === 'bullish' ? m.upsidePct : m.downsidePct;
-    stats.perPattern[m.key] = (stats.perPattern[m.key] || 0) + 1;
-    results.push({
-      symbol: stock.symbol,
-      name: stock.name,
-      lastClose: round(lastClose, 2),
-      direction,
-      pattern: m.key,
-      patternName: lib ? lib.name : m.key,
-      type: lib ? lib.type : '',
-      reliability: lib ? lib.reliability : '',
-      eta: etaLabel(m.key, Date.now()),
-      timeframe: lib ? lib.timeframe : '',
-      description: lib ? lib.description : '',
-      confidence: m.confidence,
-      upsidePct: Math.round(expectedPct * 10) / 10, // pozitif büyüklük
-      detail: m.detail,
-      context
-    });
+    const key = stock.symbol + '|' + direction;
+    const existing = bestByStockDir.get(key);
+    if (!existing || m.confidence > existing.m.confidence) {
+      bestByStockDir.set(key, { stock, m, direction, lastClose, context });
+    }
+    if (direction === 'bullish') stockBullish.add(stock.symbol);
+    else stockBearish.add(stock.symbol);
   };
 
+  // Tek gecis: her hisseyi bir kez tara, gerekirse hem yukselis hem dusus kontrol et.
   for (const stock of BIST100) {
     const sp = spark[stock.yahoo];
     if (!sp || !sp.points || !sp.points.length) continue;
@@ -304,7 +294,6 @@ async function buildFormations(dir = 'bullish') {
 
     const allCloses = sp.points.map((p) => p.c);
     const lastClose = allCloses[allCloses.length - 1];
-    // AI dogrulamasi icin kompakt fiyat baglami (istemciye gonderilmez).
     const w60 = allCloses.slice(-60);
     const context = {
       series: allCloses.slice(-20).map((c) => round(c, 2)),
@@ -324,14 +313,69 @@ async function buildFormations(dir = 'bullish') {
     }
   }
 
-  results.sort((a, b) => b.confidence - a.confidence || b.upsidePct - a.upsidePct);
+  // 'all' modunda: iki yonda da eslesen hisseleri cikar (iptal et).
+  const cancelledSymbols = new Set();
+  if (dir === 'all') {
+    for (const sym of stockBullish) {
+      if (stockBearish.has(sym)) {
+        cancelledSymbols.add(sym);
+      }
+    }
+  }
 
+  const buildItem = (stock, m, direction, lastClose, context) => {
+    const lib = PATTERN_LIBRARY[m.key];
+    const expectedPct = direction === 'bullish' ? m.upsidePct : m.downsidePct;
+    stats.perPattern[m.key] = (stats.perPattern[m.key] || 0) + 1;
+    return {
+      symbol: stock.symbol,
+      name: stock.name,
+      lastClose: round(lastClose, 2),
+      direction,
+      pattern: m.key,
+      patternName: lib ? lib.name : m.key,
+      type: lib ? lib.type : '',
+      reliability: lib ? lib.reliability : '',
+      eta: etaLabel(m.key, Date.now()),
+      timeframe: lib ? lib.timeframe : '',
+      description: lib ? lib.description : '',
+      confidence: m.confidence,
+      upsidePct: Math.round(expectedPct * 10) / 10,
+      detail: m.detail,
+      context
+    };
+  };
+
+  const bullishResults = [];
+  const bearishResults = [];
+
+  for (const [key, { stock, m, direction, lastClose, context }] of bestByStockDir) {
+    if (cancelledSymbols.has(stock.symbol)) continue;
+    const item = buildItem(stock, m, direction, lastClose, context);
+    if (direction === 'bullish') bullishResults.push(item);
+    else bearishResults.push(item);
+  }
+
+  bullishResults.sort((a, b) => b.confidence - a.confidence || b.upsidePct - a.upsidePct);
+  bearishResults.sort((a, b) => b.confidence - a.confidence || b.upsidePct - a.upsidePct);
+
+  if (dir === 'all') {
+    return {
+      updatedAt: Date.now(),
+      scanned: stats.withData,
+      dir: 'all',
+      bullish: { stats, count: bullishResults.length, results: bullishResults },
+      bearish: { stats, count: bearishResults.length, results: bearishResults }
+    };
+  }
+
+  const allResults = dir === 'bullish' ? bullishResults : bearishResults;
   return {
     updatedAt: Date.now(),
     stats,
-    count: results.length,
+    count: allResults.length,
     dir,
-    results
+    results: allResults
   };
 }
 
@@ -447,6 +491,19 @@ async function handleApi(req, res, urlObj) {
       ));
     }
     // context (AI icin fiyat serisi) istemciye gonderilmez.
+    if (dir === 'all') {
+      return sendJson(res, 200, {
+        ...data,
+        bullish: {
+          ...data.bullish,
+          results: (data.bullish.results || []).map(publicFormation)
+        },
+        bearish: {
+          ...data.bearish,
+          results: (data.bearish.results || []).map(publicFormation)
+        }
+      });
+    }
     return sendJson(res, 200, {
       ...data,
       results: (data.results || []).map(publicFormation)
@@ -462,16 +519,13 @@ async function handleApi(req, res, urlObj) {
     if (!data) {
       try {
         if (dir === 'all') {
-          const bullBase = await dedupe('formations:bullish', () => buildFormations('bullish').then((v) =>
-            cacheSet('formations:bullish', v, 15 * 60 * 1000)
+          const base = await dedupe('formations:all', () => buildFormations('all').then((v) =>
+            cacheSet('formations:all', v, 15 * 60 * 1000)
           ));
-          const bearBase = await dedupe('formations:bearish', () => buildFormations('bearish').then((v) =>
-            cacheSet('formations:bearish', v, 15 * 60 * 1000)
-          ));
-          const { validations: bValidations } = await ai.validateFormations(bullBase.results);
-          const { validations: aValidations } = await ai.validateFormations(bearBase.results);
-          const bullish = mergeValidations(bullBase, bValidations);
-          const bearish = mergeValidations(bearBase, aValidations);
+          const { validations: bValidations } = await ai.validateFormations(base.bullish.results);
+          const { validations: aValidations } = await ai.validateFormations(base.bearish.results);
+          const bullish = mergeValidations(base.bullish, bValidations);
+          const bearish = mergeValidations(base.bearish, aValidations);
           let comparison = '';
           try {
             comparison = await ai.compareDirections(bullish.results, bearish.results);
