@@ -198,47 +198,130 @@ async function buildOverview() {
 
 /* ------------------------------------------------------------------ *
  *  API : /api/gold
- *  Altin fiyati: Ons altin (GC=F, USD/ons) ve USD/TRY (TRY=X) icin
- *  Yahoo Finance quote. Gram / ceyrek / tam altin onstan hesaplanir
- *  (1 ons = 31.1035 gram, ceyrek = 1.75 g, tam = 7 g).
- *  5 dakika onbelleklenir.
+ *  Altin fiyati: haremaltin.com'dan WebSocket (socket.io) ile canli
+ *  fiyatlar alinir. Kodlar: KULCEALTIN (Gram), CEYREK_YENI (Ceyrek),
+ *  TEK_YENI (Tam), ONS (Ons). 5 dakika onbelleklenir.
+ *  Arkaplanda surekli WebSocket baglasi guncel fiyati tutar.
  * ------------------------------------------------------------------ */
 
-const GRAM_PER_OZ = 31.1034768;
-const CEYREK_GRAM = 1.75;
-const TAM_GRAM = 7;
+const GOLD_CODES = {
+  KULCEALTIN: 'gram',
+  CEYREK_YENI: 'ceyrek',
+  TEK_YENI: 'tam',
+  ONS: 'ons'
+};
+
+/* Arkaplanda guncel tutulan altin fiyatlari */
+let goldCache = {
+  gram: null,
+  ceyrek: null,
+  tam: null,
+  ons: null,
+  updatedAt: null
+};
+
+let goldWs = null;
+let goldReconnectTimer = null;
+
+function connectGoldWebSocket() {
+  if (goldWs && goldWs.readyState === WebSocket.OPEN) return;
+
+  const wsUrl = 'wss://hrmsocketonly.haremaltin.com/socket.io/?EIO=4&transport=websocket';
+  goldWs = new WebSocket(wsUrl);
+
+  goldWs.onopen = () => {
+    // Ping pong icin timer
+    setInterval(() => {
+      if (goldWs && goldWs.readyState === WebSocket.OPEN) goldWs.send('2');
+    }, 20000);
+  };
+
+  goldWs.onmessage = (event) => {
+    const msg = event.data;
+
+    // socket.io handshake (tip 0) - gormezden gel
+    if (msg.startsWith('0')) return;
+
+    // Ping (tip 2) -> Pong (tip 3)
+    if (msg === '2') {
+      goldWs.send('3');
+      return;
+    }
+
+    // socket.io mesaj paketi (tip 42)
+    if (msg.startsWith('42')) {
+      try {
+        const payload = JSON.parse(msg.substring(2));
+        if (Array.isArray(payload) && payload[0] === 'price_changed') {
+          const data = payload[1];
+          const code = data.code;
+          if (GOLD_CODES[code]) {
+            const key = GOLD_CODES[code];
+            goldCache[key] = Math.round(data.satis * 100) / 100;
+            goldCache.updatedAt = Date.now();
+          }
+        }
+      } catch (e) {}
+    }
+  };
+
+  goldWs.onerror = () => {
+    // Baglanti hatasi, yeniden baglanmaya calis
+    if (goldReconnectTimer) clearTimeout(goldReconnectTimer);
+    goldReconnectTimer = setTimeout(connectGoldWebSocket, 5000);
+  };
+
+  goldWs.onclose = () => {
+    if (goldReconnectTimer) clearTimeout(goldReconnectTimer);
+    goldReconnectTimer = setTimeout(connectGoldWebSocket, 5000);
+  };
+}
+
+// Sunucu baslangicinda WebSocket baglantisini ac
+connectGoldWebSocket();
 
 async function buildGold() {
-  const quotes = await yahoo.getQuotes(['GC=F', 'TRY=X']);
-  const gold = quotes['GC=F'] || {};
-  const usdTry = quotes['TRY=X'] || {};
+  return new Promise((resolve) => {
+    // Eger cache'de veri varsa hemen dondur
+    if (goldCache.updatedAt != null) {
+      resolve({
+        gram: goldCache.gram,
+        ceyrek: goldCache.ceyrek,
+        tam: goldCache.tam,
+        ons: goldCache.ons,
+        onsUsd: null,
+        usdTry: null,
+        updatedAt: goldCache.updatedAt
+      });
+      return;
+    }
 
-  const onsUsd =
-    gold.regularMarketPrice != null ? round(gold.regularMarketPrice, 2) : null;
-  const usdTryRate =
-    usdTry.regularMarketPrice != null ? round(usdTry.regularMarketPrice, 4) : null;
+    // Yoksa en fazla 10 saniye bekle
+    let timer;
+    let resolved = false;
 
-  let onsTry = null;
-  let gram = null;
-  let ceyrek = null;
-  let tam = null;
+    const finish = () => {
+      if (resolved) return;
+      resolved = true;
+      if (timer) clearTimeout(timer);
+      resolve({
+        gram: goldCache.gram,
+        ceyrek: goldCache.ceyrek,
+        tam: goldCache.tam,
+        ons: goldCache.ons,
+        onsUsd: null,
+        usdTry: null,
+        updatedAt: goldCache.updatedAt || Date.now()
+      });
+    };
 
-  if (onsUsd != null && usdTryRate != null) {
-    onsTry = round(onsUsd * usdTryRate, 2);
-    gram = round((onsUsd * usdTryRate) / GRAM_PER_OZ, 2);
-    ceyrek = round(gram * CEYREK_GRAM, 2);
-    tam = round(gram * TAM_GRAM, 2);
-  }
+    timer = setTimeout(finish, 10000);
 
-  return {
-    onsUsd,
-    onsTry,
-    gram,
-    ceyrek,
-    tam,
-    usdTry: usdTryRate,
-    updatedAt: Date.now()
-  };
+    // WebSocket baglantisi yoksa baslat
+    if (!goldWs || goldWs.readyState !== WebSocket.OPEN) {
+      connectGoldWebSocket();
+    }
+  });
 }
 
 /* ------------------------------------------------------------------ *

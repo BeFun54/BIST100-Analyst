@@ -1002,10 +1002,10 @@ async function renderGold() {
     wrap.appendChild(goldRow('Gram Altin', data.gram, ' TL'));
     wrap.appendChild(goldRow('Ceyrek Altin', data.ceyrek, ' TL'));
     wrap.appendChild(goldRow('Tam Altin', data.tam, ' TL'));
-    wrap.appendChild(goldRow('Ons Altin', data.onsTry, ' TL'));
+    wrap.appendChild(goldRow('Ons Altin', data.ons, ' TL'));
     wrap.appendChild(el('div', 'gold-sub',
-      'Ons: ' + (data.onsUsd != null ? fmtPrice(data.onsUsd) + ' $' : '—') +
-      '  ·  USD/TRY: ' + (data.usdTry != null ? fmtPrice(data.usdTry) : '—')));
+      'Kaynak: haremaltin.com  ·  Guncelleme: ' +
+      new Date(data.updatedAt).toLocaleTimeString('tr-TR')));
   } catch (e) {
     wrap.innerHTML = '<div class="gold-error">Altin verisi yuklenemedi</div>';
   }
