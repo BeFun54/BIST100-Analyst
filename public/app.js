@@ -26,6 +26,7 @@ const state = {
   favorites: new Set(JSON.parse(localStorage.getItem(FAV_KEY) || '[]')),
   assets: JSON.parse(localStorage.getItem(ASSET_KEY) || '[]'),
   patternResults: [], // son formasyon taramasi sonuclari (varlik beklentisi icin)
+  patternDir: 'bullish', // 'bullish' | 'bearish' | 'all'
   aiConfig: { configured: false, apiBase: '', model: '' }, // /api/ai-config'den gelen ayar durumu
   openSymbol: null,
   range: '1y',
@@ -614,6 +615,7 @@ async function loadOverview() {
 
     populateAssetSymbolSelect();
     renderTrends();
+    renderGold(); // guncel altin fiyati
     renderAssets(); // varlik penceresi aciksa guncel fiyatlarla tazele
     statusEl.innerHTML =
       '<span class="ok">● Canli</span> · Guncelleme: ' +
@@ -981,6 +983,35 @@ function renderTrends() {
 }
 
 /* ==================================================================
+ *  Altin fiyati (GC=F)
+ * ================================================================== */
+
+function goldRow(label, value, suffix, clsName) {
+  const row = el('div', 'gold-row');
+  row.appendChild(el('span', 'gold-label', label));
+  const v = el('span', 'gold-value ' + (clsName || ''), value != null ? fmtPrice(value) + (suffix || '') : '—');
+  row.appendChild(v);
+  return row;
+}
+
+async function renderGold() {
+  const wrap = document.getElementById('gold-content');
+  try {
+    const data = await api('/api/gold');
+    wrap.innerHTML = '';
+    wrap.appendChild(goldRow('Gram Altin', data.gram, ' TL'));
+    wrap.appendChild(goldRow('Ceyrek Altin', data.ceyrek, ' TL'));
+    wrap.appendChild(goldRow('Tam Altin', data.tam, ' TL'));
+    wrap.appendChild(goldRow('Ons Altin', data.onsTry, ' TL'));
+    wrap.appendChild(el('div', 'gold-sub',
+      'Ons: ' + (data.onsUsd != null ? fmtPrice(data.onsUsd) + ' $' : '—') +
+      '  ·  USD/TRY: ' + (data.usdTry != null ? fmtPrice(data.usdTry) : '—')));
+  } catch (e) {
+    wrap.innerHTML = '<div class="gold-error">Altin verisi yuklenemedi</div>';
+  }
+}
+
+/* ==================================================================
  *  Haberler (sag panel, son 7 gun)
  * ================================================================== */
 
@@ -1032,45 +1063,30 @@ let patternAiToken = 0;
 
 function openPatternModal() {
   document.getElementById('patternModal').classList.remove('hidden');
-  if (!patternLoaded) loadPatterns();
+  loadPatterns(state.patternDir);
 }
 
 function closePatternModal() {
   document.getElementById('patternModal').classList.add('hidden');
 }
 
-async function loadPatterns() {
+async function loadPatterns(dir) {
+  state.patternDir = dir;
   patternLoaded = true;
   const listEl = document.getElementById('patternList');
   const subEl = document.getElementById('patternSub');
   const sumEl = document.getElementById('patternAiSummary');
   if (sumEl) { sumEl.style.display = 'none'; sumEl.innerHTML = ''; }
+  updatePatternHeader(dir);
   listEl.innerHTML = '<div class="pattern-loading">📐 BIST100 hisseleri formasyonlarla karşılaştırılıyor… (10-20 sn)</div>';
   try {
-    const data = await api('/api/formations');
-    state.patternResults = data.results || [];
-    const st = data.stats || {};
-    subEl.textContent =
-      'BIST100 · ' + (st.scanned || data.scanned || 0) + ' hisse tarandı · ' +
-      (st.withData != null ? st.withData + ' hissede yeterli veri · ' : '') +
-      data.count + ' yükseliş sinyali';
-    if (!data.results || !data.results.length) {
-      if (st.withData === 0) {
-        listEl.innerHTML =
-          '<div class="pattern-loading">⚠️ Hisse verisi alınamadı (Yahoo Finance erişimi başarısız).<br>' +
-          '<span class="muted">İnternet bağlantısını kontrol edip tekrar deneyin.</span></div>';
-      } else {
-        listEl.innerHTML =
-          '<div class="pattern-loading">📉 Şu anda artış beklenen hisse yok.<br>' +
-          '<span class="muted">' + (st.withData || 0) + ' hissenin 1 yıllık serisi 8 boğa formasyonuyla ' +
-          'karşılaştırıldı; onaylı kırılımlı sinyal bulunamadı.</span></div>';
-      }
-      return;
-    }
-    listEl.innerHTML = '';
-    for (const r of data.results) listEl.appendChild(patternCard(r));
-    // Kural-tabanli sonuclar gosterildi; simdi AI ile dogrula.
-    aiReviewPatterns(data);
+    // 1) Kural-tabanli ham sonuclari hemen goster.
+    const base = await api('/api/formations?dir=' + encodeURIComponent(dir));
+    renderPatternList(base, null);
+    subEl.textContent = patternSubtitle(base, '🤖 AI doğrulaması yapılıyor…');
+    // 2) AI ile dogrula / karsilastir ve guncelle.
+    const aiData = await api('/api/ai-formations?dir=' + encodeURIComponent(dir));
+    renderPatternList(aiData, base);
   } catch (e) {
     patternLoaded = false;
     if (/API 404/.test(e.message)) {
@@ -1081,6 +1097,106 @@ async function loadPatterns() {
       listEl.innerHTML =
         '<div class="pattern-loading">Tarama başarısız: ' + e.message + '</div>';
     }
+  }
+}
+
+/** Modul basligini ve aciklamasini secili yona gore gunceller. */
+function updatePatternHeader(dir) {
+  const title = document.getElementById('patternTitle');
+  const legend = document.getElementById('patternLegend');
+  if (title) {
+    if (dir === 'bullish') title.textContent = '📐 Yükseliş Formasyonları';
+    else if (dir === 'bearish') title.textContent = '📐 Düşüş Formasyonları';
+    else title.textContent = '📐 Formasyon Karşılaştırması (Yükseliş vs Düşüş)';
+  }
+  if (legend) {
+    if (dir === 'bullish') {
+      legend.innerHTML = 'Klasik teknik analiz formasyonlarıyla taranır. Sadece <b>artış beklenen</b> (boğa) sinyalleri listelenir. Sonuçlar <b>🤖 yapay zeka</b> tarafından doğrulanır, düzeltilir veya elenir. Yatırım tavsiyesi değildir.';
+    } else if (dir === 'bearish') {
+      legend.innerHTML = 'Klasik teknik analiz formasyonlarıyla taranır. Sadece <b>düşüş beklenen</b> (ayış) sinyalleri listelenir. Sonuçlar <b>🤖 yapay zeka</b> tarafından doğrulanır, düzeltilir veya elenir. Yatırım tavsiyesi değildir.';
+    } else {
+      legend.innerHTML = 'Hem <b>artış</b> (boğa) hem <b>düşüş</b> (ayış) beklenen formasyonlar yan yana listelenir. Altaki AI karşılaştırma özeti iki yönü karşılaştırır. Yatırım tavsiyesi değildir.';
+    }
+  }
+}
+
+/**
+ * Formasyon listesini cizer.
+ * data: /api/ai-formations (veya /api/formations) cavabi.
+ * base: ham /api/formations cavabi (sub basligi icin).
+ */
+function renderPatternList(data, base) {
+  const listEl = document.getElementById('patternList');
+  const subEl = document.getElementById('patternSub');
+  const sumEl = document.getElementById('patternAiSummary');
+  if (!data || !listEl) return;
+
+  // Tek yon (bullish / bearish): klasik tek liste davranisi.
+  if (data.dir !== 'all') {
+    state.patternResults = data.results || [];
+    const st = data.stats || {};
+    let s = 'BIST100 · ' + (st.scanned || data.scanned || 0) + ' hisse tarandı · ' +
+      (st.withData != null ? st.withData + ' hissede yeterli veri · ' : '') +
+      data.count + ' sinyal';
+    if (data.dir === 'bearish') s = s.replace('sinyal', 'düşüş sinyali');
+    subEl.textContent = s;
+    if (sumEl) { sumEl.style.display = 'none'; sumEl.innerHTML = ''; }
+
+    listEl.innerHTML = '';
+    if (!data.results || !data.results.length) {
+      const emptyMsg = data.dir === 'bearish'
+        ? '📉 Şu anda düşüş beklenen hisse yok.<br><span class="muted">Tarama tamamlandı; onaylı kırılımlı düşüş sinyali bulunamadı.</span>'
+        : '📉 Şu anda artış beklenen hisse yok.<br><span class="muted">Tarama tamamlandı; onaylı kırılımlı yükseliş sinyali bulunamadı.</span>';
+      listEl.innerHTML = '<div class="pattern-loading">' + emptyMsg + '</div>';
+      return;
+    }
+    listEl.innerHTML = '';
+    for (const r of data.results) listEl.appendChild(patternCard(r));
+    showAiSummary(data);
+    return;
+  }
+
+  // data.dir === 'all': iki yon yan yana + AI karsilastirma.
+  const bull = data.bullish || {};
+  const bear = data.bearish || {};
+  const bStats = bull.stats || {};
+  const aStats = bear.stats || {};
+  subEl.textContent = 'BIST100 · ' +
+    ((bStats.scanned || 0) + (aStats.scanned || 0)) + ' hisse tarandı · ' +
+    (bull.count || 0) + ' yükseliş · ' + (bear.count || 0) + ' düşüş sinyali';
+
+  // AI ozet banner (ikisini birlestir).
+  if (sumEl) {
+    sumEl.style.display = 'flex';
+    sumEl.innerHTML = '';
+    sumEl.appendChild(el('span', 'ai-sum-title', '🤖 AI karşılaştırması'));
+    const bSum = bull.aiSummary || {}; const aSum = bear.aiSummary || {};
+    sumEl.appendChild(el('span', '', 'Yükseliş: ' + (bSum.approved || 0) + ' onay / ' + (bSum.rejected || 0) + ' red'));
+    sumEl.appendChild(el('span', '', 'Düşüş: ' + (aSum.approved || 0) + ' onay / ' + (aSum.rejected || 0) + ' red'));
+    if (data.comparison) {
+      const comp = el('div', 'ai-comparison', '💬 ' + data.comparison);
+      comp.style.marginTop = '6px';
+      comp.style.fontSize = '12.5px';
+      comp.style.color = '#c4b5fd';
+      sumEl.appendChild(comp);
+    }
+  }
+
+  state.patternResults = [...(bull.results || []), ...(bear.results || [])];
+  listEl.innerHTML = '';
+
+  if (bull.results && bull.results.length) {
+    listEl.appendChild(el('div', 'pattern-section', '📈 Yükseliş Beklenen (' + bull.count + ')'));
+    for (const r of bull.results) listEl.appendChild(patternCard(r));
+  } else {
+    listEl.appendChild(el('div', 'pattern-empty', '📈 Yükseliş sinyali bulunamadı.'));
+  }
+
+  if (bear.results && bear.results.length) {
+    listEl.appendChild(el('div', 'pattern-section', '📉 Düşüş Beklenen (' + bear.count + ')'));
+    for (const r of bear.results) listEl.appendChild(patternCard(r));
+  } else {
+    listEl.appendChild(el('div', 'pattern-empty', '📉 Düşüş sinyali bulunamadı.'));
   }
 }
 
@@ -1151,19 +1267,27 @@ async function aiReviewPatterns(base) {
 function patternCard(r) {
   const card = el('div', 'pattern-card');
   card.dataset.symbol = r.symbol;
+  const isBearish = r.direction === 'bearish';
+  card.classList.add(isBearish ? 'pattern-bearish' : 'pattern-bullish');
 
   const head = el('div', 'pc-head');
   const symWrap = el('div', 'pc-sym');
   symWrap.appendChild(el('span', 'pc-symbol', r.symbol));
   symWrap.appendChild(el('span', 'pc-name', r.name));
   head.appendChild(symWrap);
-  head.appendChild(el('span', 'pc-upside', '+' + r.upsidePct + '%'));
+  const sign = isBearish ? '−' : '+';
+  const pctEl = el('span', 'pc-upside', sign + r.upsidePct + '%');
+  pctEl.style.color = isBearish ? 'var(--down)' : 'var(--up)';
+  head.appendChild(pctEl);
   card.appendChild(head);
 
-  card.appendChild(el('div', 'pc-verdict',
+  const verb = isBearish ? 'düşeceğini düşünüyorum.' : 'artacağını düşünüyorum.';
+  const verdict = el('div', 'pc-verdict',
     r.patternName + ' formasyonundan faydalanarak ' + r.symbol +
-    ' hissesinin artacağını düşünüyorum.'
-  ));
+    ' hissesinin ' + verb
+  );
+  verdict.style.color = isBearish ? 'var(--down)' : 'var(--up)';
+  card.appendChild(verdict);
 
   card.appendChild(el('div', 'pc-detail', r.detail));
   card.appendChild(el('div', 'pc-desc', r.description));
@@ -1183,7 +1307,7 @@ function patternCard(r) {
   meta.appendChild(el('span', '', 'Güven: %' + r.confidence));
   meta.appendChild(el('span', '', r.type + ' · Güvenilirlik: ' + r.reliability));
   meta.appendChild(el('span', 'pc-eta',
-    '⏳ Tahmini yükseliş zamanı: ' + (r.eta || r.timeframe || 'belirsiz')));
+    '⏳ Tahmini hareket zamanı: ' + (r.eta || r.timeframe || 'belirsiz')));
   card.appendChild(meta);
 
   if (r.origUpsidePct != null || r.origConfidence != null) {
@@ -1541,6 +1665,15 @@ function init() {
   });
   document.getElementById('patternBtn').addEventListener('click', openPatternModal);
   document.getElementById('patternClose').addEventListener('click', closePatternModal);
+  // Formasyon yonu toggle butonlari (yukselis / dusus / karsilastirma)
+  document.querySelectorAll('.pt-btn').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('.pt-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadPatterns(btn.dataset.dir);
+    });
+  });
   document.getElementById('patternModal').addEventListener('click', (e) => {
     if (e.target.id === 'patternModal') closePatternModal();
   });

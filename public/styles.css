@@ -133,34 +133,118 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 
 /* ---------------- Trendler ---------------- */
 
+.trends-body {
+  display: flex;
+  gap: 8px;
+  padding: 4px 14px 14px;
+}
+
 .trends-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Sag tarafta acilan altin fiyati paneli */
+.gold-panel {
+  width: 230px;
+  flex-shrink: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.gold-content {
+  padding: 14px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
-  padding: 4px 14px 14px;
+}
+
+.gold-sym {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+
+.gold-price {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.gold-change {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.gold-change.up { color: var(--up); }
+.gold-change.down { color: var(--down); }
+.gold-change.flat { color: var(--muted); }
+
+.gold-loading {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.gold-error {
+  color: var(--down);
+  font-size: 12px;
+}
+
+.gold-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+.gold-row:last-child { border-bottom: none; }
+.gold-label { color: var(--muted); }
+.gold-value { font-weight: 600; text-align: right; }
+
+.gold-sub {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+@media (max-width: 900px) {
+  .trends-body { flex-direction: column; }
+  .gold-panel { width: 100%; }
 }
 
 .trend-card {
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 12px;
+  padding: 10px;
   cursor: pointer;
   transition: transform .12s, border-color .12s;
+  min-width: 0;
+  overflow: hidden;
 }
 .trend-card:hover { transform: translateY(-2px); border-color: #33415a; }
-.trend-card .t-sym { font-weight: 700; font-size: 15px; }
+.trend-card .t-sym { font-weight: 700; font-size: 13px; }
 .trend-card .t-name {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
-.trend-card .t-row { display: flex; justify-content: space-between; font-size: 12px; }
-.trend-card .t-pct { font-weight: 700; font-size: 16px; }
-.trend-card canvas { width: 100%; height: 34px; display: block; margin-top: 8px; }
+.trend-card .t-row { display: flex; justify-content: space-between; font-size: 11px; }
+.trend-card .t-pct { font-weight: 700; font-size: 14px; }
+.trend-card canvas { width: 100%; height: 28px; display: block; margin-top: 6px; }
 
 .skeleton-card {
   height: 92px;
@@ -521,6 +605,57 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
   background: rgba(124, 58, 237, .12);
   border: 1px dashed rgba(167, 139, 250, .5);
   text-align: center;
+}
+
+/* Formasyon yonu toggle butonlari */
+.pattern-toggle {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.pt-btn {
+  flex: 1 1 0;
+  min-width: 90px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all .15s;
+}
+.pt-btn:hover { color: var(--text); border-color: var(--muted); }
+.pt-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(79, 157, 255, .35);
+}
+
+/* Yon duyarlı kart kenarlik rengi */
+.pattern-card.pattern-bullish { border-left-color: var(--up); }
+.pattern-card.pattern-bearish { border-left-color: var(--down); }
+.pattern-card.pattern-bearish .pc-conf-fill {
+  background: linear-gradient(90deg, #2b6cb0, var(--down));
+}
+
+/* Bolum basliklari (karsilasma modu) */
+.pattern-section {
+  margin: 14px 8px 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.pattern-empty {
+  padding: 26px 14px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .pc-ai-badge {

@@ -19,7 +19,7 @@ const yahoo = require('./lib/yahoo');
 const news = require('./lib/news');
 const ai = require('./lib/ai');
 const { BIST100, bySymbol } = require('./data/bist100');
-const { PATTERN_LIBRARY, scanBullishPatterns, etaLabel } = require('./lib/patterns');
+const { PATTERN_LIBRARY, scanBullishPatterns, scanBearishPatterns, etaLabel } = require('./lib/patterns');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -197,13 +197,58 @@ async function buildOverview() {
 }
 
 /* ------------------------------------------------------------------ *
+ *  API : /api/gold
+ *  Altin fiyati: Ons altin (GC=F, USD/ons) ve USD/TRY (TRY=X) icin
+ *  Yahoo Finance quote. Gram / ceyrek / tam altin onstan hesaplanir
+ *  (1 ons = 31.1035 gram, ceyrek = 1.75 g, tam = 7 g).
+ *  5 dakika onbelleklenir.
+ * ------------------------------------------------------------------ */
+
+const GRAM_PER_OZ = 31.1034768;
+const CEYREK_GRAM = 1.75;
+const TAM_GRAM = 7;
+
+async function buildGold() {
+  const quotes = await yahoo.getQuotes(['GC=F', 'TRY=X']);
+  const gold = quotes['GC=F'] || {};
+  const usdTry = quotes['TRY=X'] || {};
+
+  const onsUsd =
+    gold.regularMarketPrice != null ? round(gold.regularMarketPrice, 2) : null;
+  const usdTryRate =
+    usdTry.regularMarketPrice != null ? round(usdTry.regularMarketPrice, 4) : null;
+
+  let onsTry = null;
+  let gram = null;
+  let ceyrek = null;
+  let tam = null;
+
+  if (onsUsd != null && usdTryRate != null) {
+    onsTry = round(onsUsd * usdTryRate, 2);
+    gram = round((onsUsd * usdTryRate) / GRAM_PER_OZ, 2);
+    ceyrek = round(gram * CEYREK_GRAM, 2);
+    tam = round(gram * TAM_GRAM, 2);
+  }
+
+  return {
+    onsUsd,
+    onsTry,
+    gram,
+    ceyrek,
+    tam,
+    usdTry: usdTryRate,
+    updatedAt: Date.now()
+  };
+}
+
+/* ------------------------------------------------------------------ *
  *  API : /api/formations
  *  BIST100 hisselerini klasik boga formasyonlariyla karsilastirir.
  *  Tek spark isteğiyle 1 yillik gunluk kapanis serilerini alir,
  *  sadece YUKSELIS beklenen eslesmeleri dondurur. 15 dk onbellek.
  * ------------------------------------------------------------------ */
 
-async function buildFormations() {
+async function buildFormations(dir = 'bullish') {
   const symbols = BIST100.map((s) => s.yahoo);
   let spark = {};
   try {
@@ -219,6 +264,34 @@ async function buildFormations() {
     tooShort: 0,
     perPattern: {}
   };
+  const scanBullish = dir === 'bullish' || dir === 'all';
+  const scanBearish = dir === 'bearish' || dir === 'all';
+
+  /** Tek bir formasyon eslesmesini sonuca ekler (yon duyarlı). */
+  const pushResult = (stock, m, direction, lastClose, context) => {
+    const lib = PATTERN_LIBRARY[m.key];
+    // upsidePct = beklenen hareketin büyüklüğü (pozitif), isaret direction'dan belli olur.
+    const expectedPct = direction === 'bullish' ? m.upsidePct : m.downsidePct;
+    stats.perPattern[m.key] = (stats.perPattern[m.key] || 0) + 1;
+    results.push({
+      symbol: stock.symbol,
+      name: stock.name,
+      lastClose: round(lastClose, 2),
+      direction,
+      pattern: m.key,
+      patternName: lib ? lib.name : m.key,
+      type: lib ? lib.type : '',
+      reliability: lib ? lib.reliability : '',
+      eta: etaLabel(m.key, Date.now()),
+      timeframe: lib ? lib.timeframe : '',
+      description: lib ? lib.description : '',
+      confidence: m.confidence,
+      upsidePct: Math.round(expectedPct * 10) / 10, // pozitif büyüklük
+      detail: m.detail,
+      context
+    });
+  };
+
   for (const stock of BIST100) {
     const sp = spark[stock.yahoo];
     if (!sp || !sp.points || !sp.points.length) continue;
@@ -227,9 +300,6 @@ async function buildFormations() {
       continue;
     }
     stats.withData++;
-
-    const matches = scanBullishPatterns(sp.points);
-    if (!matches.length) continue;
 
     const allCloses = sp.points.map((p) => p.c);
     const lastClose = allCloses[allCloses.length - 1];
@@ -243,25 +313,13 @@ async function buildFormations() {
       ma200: allCloses.length >= 200 ? round(avg(allCloses.slice(-200)), 2) : null
     };
 
-    for (const m of matches) {
-      stats.perPattern[m.key] = (stats.perPattern[m.key] || 0) + 1;
-      const lib = PATTERN_LIBRARY[m.key];
-      results.push({
-        symbol: stock.symbol,
-        name: stock.name,
-        lastClose: round(lastClose, 2),
-        pattern: m.key,
-        patternName: lib ? lib.name : m.key,
-        type: lib ? lib.type : '',
-        reliability: lib ? lib.reliability : '',
-        eta: etaLabel(m.key, Date.now()),
-        timeframe: lib ? lib.timeframe : '',
-        description: lib ? lib.description : '',
-        confidence: m.confidence,
-        upsidePct: m.upsidePct,
-        detail: m.detail,
-        context
-      });
+    if (scanBullish) {
+      const matches = scanBullishPatterns(sp.points);
+      for (const m of matches) pushResult(stock, m, 'bullish', lastClose, context);
+    }
+    if (scanBearish) {
+      const matches = scanBearishPatterns(sp.points);
+      for (const m of matches) pushResult(stock, m, 'bearish', lastClose, context);
     }
   }
 
@@ -271,6 +329,7 @@ async function buildFormations() {
     updatedAt: Date.now(),
     stats,
     count: results.length,
+    dir,
     results
   };
 }
@@ -367,11 +426,23 @@ async function handleApi(req, res, urlObj) {
     return sendJson(res, 200, data);
   }
 
-  if (p === '/api/formations') {
-    let data = cacheGet('formations');
+  if (p === '/api/gold') {
+    let data = cacheGet('gold');
     if (!data) {
-      data = await dedupe('formations', () => buildFormations().then((v) =>
-        cacheSet('formations', v, 15 * 60 * 1000)
+      data = await dedupe('gold', () =>
+        buildGold().then((v) => cacheSet('gold', v, 5 * 60 * 1000))
+      );
+    }
+    return sendJson(res, 200, data);
+  }
+
+  if (p === '/api/formations') {
+    const dir = (urlObj.searchParams.get('dir') || 'bullish');
+    const ckey = 'formations:' + dir;
+    let data = cacheGet(ckey);
+    if (!data) {
+      data = await dedupe(ckey, () => buildFormations(dir).then((v) =>
+        cacheSet(ckey, v, 15 * 60 * 1000)
       ));
     }
     // context (AI icin fiyat serisi) istemciye gonderilmez.
@@ -383,15 +454,45 @@ async function handleApi(req, res, urlObj) {
 
   if (p === '/api/ai-formations') {
     // Kural-tabanli formasyon taramasi + AI dogrulamasu/torpilemesi.
-    let data = cacheGet('ai:formations');
+    // dir: bullish | bearish | all (iki yonun da karsilastirmasi)
+    const dir = (urlObj.searchParams.get('dir') || 'bullish');
+    const ckey = 'ai:formations:' + dir;
+    let data = cacheGet(ckey);
     if (!data) {
       try {
-        const base = await dedupe('formations', () => buildFormations().then((v) =>
-          cacheSet('formations', v, 15 * 60 * 1000)
-        ));
-        const { validations } = await ai.validateFormations(base.results);
-        data = mergeValidations(base, validations);
-        cacheSet('ai:formations', data, 30 * 60 * 1000); // 30 dk onbellek
+        if (dir === 'all') {
+          const bullBase = await dedupe('formations:bullish', () => buildFormations('bullish').then((v) =>
+            cacheSet('formations:bullish', v, 15 * 60 * 1000)
+          ));
+          const bearBase = await dedupe('formations:bearish', () => buildFormations('bearish').then((v) =>
+            cacheSet('formations:bearish', v, 15 * 60 * 1000)
+          ));
+          const { validations: bValidations } = await ai.validateFormations(bullBase.results);
+          const { validations: aValidations } = await ai.validateFormations(bearBase.results);
+          const bullish = mergeValidations(bullBase, bValidations);
+          const bearish = mergeValidations(bearBase, aValidations);
+          let comparison = '';
+          try {
+            comparison = await ai.compareDirections(bullish.results, bearish.results);
+          } catch (_) {
+            comparison = 'AI karsilasmasi alinamadi.';
+          }
+          data = {
+            updatedAt: Date.now(),
+            dir: 'all',
+            bullish,
+            bearish,
+            comparison
+          };
+        } else {
+          const base = await dedupe('formations:' + dir, () => buildFormations(dir).then((v) =>
+            cacheSet('formations:' + dir, v, 15 * 60 * 1000)
+          ));
+          const { validations } = await ai.validateFormations(base.results);
+          data = mergeValidations(base, validations);
+          data.dir = dir;
+        }
+        cacheSet(ckey, data, 30 * 60 * 1000); // 30 dk onbellek
       } catch (e) {
         return sendJson(res, 502, {
           error: 'AI formasyon dogrulamasi alinamadi',

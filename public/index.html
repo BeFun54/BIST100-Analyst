@@ -50,11 +50,22 @@
           <h2>🔥 Bugunun Trendleri</h2>
           <span class="muted">Son 1 haftanin en hareketli hisseleri</span>
         </div>
-        <div id="trends" class="trends-grid">
-          <div class="skeleton-card"></div>
-          <div class="skeleton-card"></div>
-          <div class="skeleton-card"></div>
-          <div class="skeleton-card"></div>
+        <div class="trends-body">
+          <div id="trends" class="trends-grid">
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+          </div>
+          <div id="gold" class="gold-panel">
+            <div class="section-head">
+              <h2>🥇 Altin</h2>
+              <span class="muted">Gram / Ceyrek / Tam / Ons</span>
+            </div>
+            <div id="gold-content" class="gold-content">
+              <div class="gold-loading">Altin yukleniyor…</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -110,12 +121,17 @@
     <div class="modal-box pattern-box">
       <div class="modal-head">
         <div>
-          <h3>📐 Yükseliş Formasyonları</h3>
+          <h3 id="patternTitle">📐 Yükseliş Formasyonları</h3>
           <span id="patternSub" class="muted">BIST100 taraması</span>
+        </div>
+        <div class="pattern-toggle" role="group" aria-label="Formasyon yonu secimi">
+          <button class="pt-btn active" data-dir="bullish" title="Yükseliş (boğa) formasyonlari">📈 Yükseliş</button>
+          <button class="pt-btn" data-dir="bearish" title="Düşüş (ayış) formasyonlari">📉 Düşüş</button>
+          <button class="pt-btn" data-dir="all" title="Iki yonu karsilastir">🔄 Karşılaştır</button>
         </div>
         <button id="patternClose" class="btn" title="Kapat">✕</button>
       </div>
-      <div class="pattern-legend">
+      <div class="pattern-legend" id="patternLegend">
         Klasik teknik analiz formasyonlarıyla taranır. Sadece <b>artış beklenen</b>
         (boğa) sinyalleri listelenir. Sonuçlar <b>🤖 yapay zeka</b> tarafından gerçek
         fiyat serisine göre doğrulanır, düzeltilir veya elenir. Yatırım tavsiyesi değildir.
