@@ -3,18 +3,19 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>BIST100 Analyst - Canli Borsa Takip</title>
+  <title>BIST100 Analist V2 - Canli Borsa Takip</title>
   <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/glass.css" />
   <link rel="icon" href="/logo.svg" />
 </head>
 <body>
 
   <header class="topbar">
     <div class="brand">
-      <img src="/logo.svg" alt="BIST100 Analyst" class="logo-img" />
+      <img src="/logo.svg" alt="BIST100 Analist V2" class="logo-img" />
       <div>
-        <h1>BIST100 Analyst</h1>
-        <span class="tagline">Canli fiyatlar &middot; Klasik grafikler &middot; 5 yillik veri</span>
+        <h1>BIST100 Analist V2</h1>
+        <span class="tagline">Canli fiyatlar &middot; AI analiz &middot; Formasyon tarama &middot; Liquid Glass</span>
       </div>
     </div>
 
@@ -31,6 +32,9 @@
       </button>
       <button id="aiBtn" class="btn btn-ai" title="Yapay zeka analiz">
         🤖 AI Analiz
+      </button>
+      <button id="apiKeyBtn" class="btn btn-key" title="AI API anahtarı ayarları">
+        🔑 API <span id="apiKeyDot" class="key-dot"></span>
       </button>
       <button id="refreshBtn" class="btn" title="Verileri yenile">⟳</button>
     </div>
@@ -98,8 +102,8 @@
   </main>
 
   <footer class="footer">
-    Veri kaynagi: Yahoo Finance &middot; Haberler: Google Haberler &middot;
-    Bu site yatirim tavsiyesi degildir.
+    BIST100 Analist V2 &middot; Veri: Yahoo Finance &middot; Altin: Truncgil Finans &middot;
+    Haberler: Google Haberler &middot; Bu site yatirim tavsiyesi degildir.
   </footer>
 
   <!-- Grafik buyutme (modal) -->
@@ -113,6 +117,7 @@
         <button id="modalClose" class="btn" title="Kapat">✕</button>
       </div>
       <div id="modalChartWrap" class="modal-chart"></div>
+      <div id="modalAddWrap" class="modal-add-wrap"></div>
     </div>
   </div>
 
@@ -136,6 +141,7 @@
         (boğa) sinyalleri listelenir. Sonuçlar <b>🤖 yapay zeka</b> tarafından gerçek
         fiyat serisine göre doğrulanır, düzeltilir veya elenir. Yatırım tavsiyesi değildir.
       </div>
+      <div id="patternAiNotice" class="pattern-ai-notice" style="display:none;"></div>
       <div id="patternAiSummary" class="ai-summary" style="display:none;"></div>
       <div id="patternList" class="pattern-list">
         <div class="pattern-loading">Formasyonlar taranıyor…</div>
@@ -152,6 +158,7 @@
           <span id="aiSub" class="muted">Yapay zeka ile piyasa ve hisse yorumu</span>
         </div>
         <button id="aiConfigBtn" class="btn btn-small" title="AI ayarlari (api key, model)">⚙️ Ayarlar</button>
+        <button id="aiRefreshBtn" class="btn btn-small" title="Analizi yenile">↻ Yenile</button>
         <button id="aiClose" class="btn" title="Kapat">✕</button>
       </div>
       <div class="ai-tabs">
@@ -166,6 +173,12 @@
         <div class="ai-stock-controls">
           <label>Hisse secin:</label>
           <select id="aiStockSelect"></select>
+          <label>Vade:</label>
+          <select id="aiHorizon">
+            <option value="all">Tüm vadeler</option>
+            <option value="short">Yakın vade (1-4 hafta)</option>
+            <option value="long">Uzak vade (3-12 ay)</option>
+          </select>
           <button id="aiAnalyzeStockBtn" class="btn btn-ai">Analiz Et</button>
         </div>
         <div class="ai-loading" id="aiStockLoading" style="display:none;">Hisse analizi yukleniyor…</div>
@@ -179,56 +192,57 @@
 
   <!-- AI ayarlari (api key, base url, model) -->
   <div id="aiConfigModal" class="modal hidden">
-    <div class="modal-box ai-box" style="max-width: 560px; width: 92vw;">
+    <div class="modal-box ai-box ai-config-box">
       <div class="modal-head">
         <div>
-          <h3>⚙️ AI Ayarları</h3>
-          <span class="muted">API anahtari, sunucu adresi ve model secimi</span>
+          <h3>🔑 AI API Ayarları</h3>
+          <span class="muted">EVREN, NVIDIA veya OpenAI uyumlu her sağlayıcı</span>
         </div>
         <button id="aiConfigClose" class="btn" title="Kapat">✕</button>
       </div>
-      <div class="ai-config-body" style="padding: 18px; display: flex; flex-direction: column; gap: 14px;">
+      <div class="ai-config-body">
         <div id="aiConfigNotice" class="ai-config-notice" style="display: none;">
-          Api key girilmeden AI ozellikleri kullanilamaz.
+          API anahtarı girilmeden AI özellikleri kullanılamaz.
         </div>
-        <label class="ai-config-label">API Anahtari <span class="muted">(orn. nvapi-...)</span></label>
+
+        <label class="ai-config-label">Sağlayıcı</label>
+        <select id="aiConfigProvider" class="ai-config-select">
+          <option value="evren">EVREN — SSB Milli Yapay Zeka Platformu (önerilen)</option>
+          <option value="nvidia">NVIDIA NIM</option>
+          <option value="openai">OpenAI</option>
+          <option value="openrouter">OpenRouter</option>
+          <option value="groq">Groq</option>
+          <option value="deepseek">DeepSeek</option>
+          <option value="custom">Özel / Diğer (OpenAI uyumlu)</option>
+        </select>
+
+        <label class="ai-config-label">API Anahtarı <span id="aiConfigKeyHint" class="muted">(evren_llm_...)</span></label>
         <div class="ai-config-input-wrap">
-          <input id="aiConfigKey" type="password" placeholder="API anahtarınızı buraya girin" />
+          <input id="aiConfigKey" type="password" placeholder="API anahtarınızı buraya girin" autocomplete="off" />
           <button id="aiConfigKeyToggle" class="btn" type="button" style="padding: 6px 10px; font-size: 12px;">👁️</button>
         </div>
+
         <label class="ai-config-label">Sunucu Adresi (Base URL)</label>
-        <div class="ai-config-row" style="display: flex; gap: 8px; align-items: center;">
-          <select id="aiConfigBasePreset" style="flex: 1;">
-            <option value="https://integrate.api.nvidia.com/v1/chat/completions">NVIDIA NIM (varsayılan)</option>
-            <option value="https://api.openai.com/v1/chat/completions">OpenAI</option>
-            <option value="https://openrouter.ai/api/v1/chat/completions">OpenRouter</option>
-            <option value="https://api.groq.com/openai/v1/chat/completions">Groq</option>
-            <option value="https://api.deepseek.com/chat/completions">DeepSeek</option>
-            <option value="__custom__">Özel adres …</option>
-          </select>
-          <input id="aiConfigBaseUrl" type="url" placeholder="https://api.example.com/v1/chat/completions" value="https://integrate.api.nvidia.com/v1/chat/completions" />
-        </div>
+        <input id="aiConfigBaseUrl" class="ai-config-input" type="url" placeholder="https://evren-llmapi.ssyz.org.tr/v1/chat/completions" />
+
         <label class="ai-config-label">Model</label>
-        <div class="ai-config-row" style="display: flex; gap: 8px; align-items: center;">
-          <select id="aiConfigModel" style="flex: 1;">
-            <option value="nvidia/nemotron-3.5-super-vl-120b-a12b">nvidia/nemotron-3.5-super-vl-120b-a12b (NVIDIA)</option>
-            <option value="nvidia/llama-3.1-nemotron-70b-instruct">nvidia/llama-3.1-nemotron-70b-instruct (NVIDIA)</option>
-            <option value="gpt-4o">gpt-4o (OpenAI)</option>
-            <option value="gpt-4o-mini">gpt-4o-mini (OpenAI)</option>
-            <option value="gpt-3.5-turbo">gpt-3.5-turbo (OpenAI)</option>
-            <option value="deepseek-chat">deepseek-chat</option>
-            <option value="deepseek-reasoner">deepseek-reasoner</option>
-            <option value="llama-3.1-405b-instruct">llama-3.1-405b-instruct</option>
-            <option value="mixtral-8x7b-32768">mixtral-8x7b-32768 (Groq)</option>
-            <option value="__custom__">Özel model …</option>
-          </select>
-          <input id="aiConfigModelCustom" type="text" placeholder="Model kimliğini girin" disabled />
+        <div class="ai-config-row">
+          <select id="aiConfigModel" class="ai-config-select" style="flex: 1;"></select>
+          <button id="aiConfigFetchModels" class="btn" type="button" title="Hesabınıza tanımlı modelleri sunucudan çek">↻ Modelleri Getir</button>
         </div>
-        <div class="ai-config-actions" style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px;">
+        <input id="aiConfigModelCustom" class="ai-config-input" type="text" placeholder="Özel model kimliği" style="display:none;" />
+
+        <div class="ai-config-help">
+          Anahtar yalnızca <b>bu tarayıcıda</b> saklanır ve AI istekleri sırasında sunucuya iletilir.
+          Sunucu anahtarı kaydetmez. EVREN kullanım şartları ilk istekte otomatik onaylanır.
+        </div>
+
+        <div class="ai-config-actions">
+          <button id="aiConfigClearBtn" class="btn" type="button">Temizle</button>
           <button id="aiConfigTestBtn" class="btn" type="button">Bağlantıyı Test Et</button>
           <button id="aiConfigSaveBtn" class="btn btn-ai" type="button">Kaydet &amp; Etkinleştir</button>
         </div>
-        <div id="aiConfigMessage" class="ai-config-message" style="margin-top: 8px;"></div>
+        <div id="aiConfigMessage" class="ai-config-message" style="display:none;"></div>
       </div>
     </div>
   </div>

@@ -1,165 +1,191 @@
-# BIST100 Analyst
+# BIST100 Analist V2
 
-BIST100 hisselerini canli olarak izleyebileceginiz, klasik mum (candlestick)
-grafikleri, son 7 gunun haberleri, altin fiyatlari ve yapay zeka destekli
-teknik analizleri tek ekranda birlestiren web uygulamasi.
+BIST100 hisselerini canlı olarak izleyebileceğiniz; klasik mum (candlestick)
+grafikleri, son 7 günün haberleri, altın fiyatları, gelişmiş teknik formasyon
+taraması ve **haber destekli yapay zeka analizlerini** tek ekranda birleştiren
+web uygulaması.
 
-## Ozellikler
+## V2 yenilikleri
 
-- **Tum BIST100 hisseleri** alfabetik olarak listelenir; her satirda son fiyat,
-  gunluk ve haftalik degisim renkli olarak gosterilir.
-- **Anlik guncelleme**: fiyatlar 60 saniyede bir otomatik yenilenir;
-  `⟳` dugmesi ile manuel yenilenebilir.
-- **Hisseye tiklayinca alan genisler** ve klasik mum grafigi (hacim dahil)
-  acilir. **5 Yil / 1 Yil / 6 Ay / 1 Ay / Bugun** araliklarindan biri
-  secilebilir. Grafik buyutulebilir (`⛶ Buyut`) ve uzerine gelince OHLC
-  detaylari gorunur.
-- **Sag panelde haberler**: secilen sirketin son 1 haftadaki gelismeleri;
-  hicbir hisse secili degilse piyasa gundemi. Kaynak: Google Haberler.
-- **Bugunun Trendleri**: son 1 haftada en cok hareket eden 8 hisse,
-  mini sparkline grafikleriyle.
-- **Favoriler**: yildiza tiklayarak favorilere ekleyin; `Favorilerim` dugmesiyle
-  tek tikla sadece favorileri gorun (tarayici hafizasinda saklanir).
-- **AI Analiz (NVIDIA NIM)**: tek hisse ve genel piyasa icin Turkce teknik ve
-  temel analiz; kural-tabanli formasyon taramalarinin Nemotron modeli ile
-  dogrulanmasi. AI sunucu adresi, modeli ve API anahtari tarayici uzerinden
-  ayarlanabilir ve test edilebilir (`/api/ai-config`, `/api/ai-test`).
+- **EVREN (SSB) başta olmak üzere** NVIDIA, OpenAI, OpenRouter, Groq ve DeepSeek
+  destekli, kullanıcı bazlı API anahtarı yönetimi.
+- EVREN kullanım şartlarının otomatik onayı, model listesinin hesaptan çekilmesi
+  ve bağlantı testi.
+- **Gelişmiş formasyon motoru**: trend, geometri, kırılım tazeliği ve ihlal
+  kontrolleri; RSI/SMA/ATR bağlamı.
+- Formasyonların haber ve fiyat serisiyle **AI doğrulaması**; onay, düzeltme,
+  eleme ve iki yön karşılaştırması.
+- Haberleri kullanarak **yakın (1-4 hafta) ve uzak (3-12 ay) vadeli** AI tahmini.
+- Grafikten doğrudan **Varlıklarıma Ekle**.
+- **Apple Liquid Glass** teması.
+- Altın fiyatlarının hesaplanmadan **Truncgil Finans**’tan doğrudan çekilmesi.
 
-## Altin Fiyatlari (`/api/gold`) — Yeni
+## Öne çıkanlar
 
-Sol panelin **Altin** kismininda guncecelik altin fiyatlari gosterilir:
+- **Tüm BIST100 hisseleri** alfabetik olarak listelenir; son fiyat, günlük ve
+  haftalık değişim renkli gösterilir. Fiyatlar 60 saniyede bir yenilenir.
+- **Hisseye tıklayınca** satır genişler; hacimli mum grafiği açılır.
+  **5 Yıl / 1 Yıl / 6 Ay / 1 Ay / Bugün** aralıkları, `⛶ Büyüt` ve OHLC
+  tooltip'i korunmuştur.
+- **Grafikten doğrudan Varlıklarıma Ekle**: İster ana ekrandaki genişleyen
+  grafikten ister büyütülmüş grafik penceresinden, güncel fiyat ve tarih ön
+  doldurulmuş mini formla hisse portföye eklenebilir.
+- **Bugünün Trendleri + Altın** aynı görünümde: haftanın en hareketli 8 hissesi
+  sparkline'larla, hemen yanında **Truncgil Finans'tan doğrudan** Gram/Çeyrek/Tam
+  (TL) ve Ons (USD) altın fiyatları.
+- **Haberler** aynı sağ panelde: seçili hissenin son 1 haftası; hisse seçili
+  değilse piyasa gündemi (Google Haberler).
+- **Varlıklarım**: hisse, adet, alış fiyatı ve alış tarihi ile portföy kaydı;
+  formasyon beklentisi, tahmini satış hedefi, kâr/zarar takibi (localStorage).
+- **Gelişmiş formasyon motoru**: Çift Dip/Zirve, TOBO/OBO, Yükselen/Düşen
+  Üçgen, Fincan-Kulp, Boğa/Ayı Bayrağı, Düşen/Yükselen Kama, Altın/Ölüm
+  Kesişimi, Yuvarlak Dip/Tepe. Önceki trend, geometri, kırılım tazeliği ve
+  formasyon ihlali kontrolleriyle hatalı sinyaller ayıklanır.
+- **AI formasyon doğrulaması**: Kural tabanlı adaylar, gerçek fiyat serisi,
+  RSI/SMA ve haber bağlamıyla yapay zekâ tarafından onaylanır, düzeltilir veya
+  elenir. AI'ye ulaşılamazsa kural tabanlı sonuçlar kaybolmaz.
+- **Haber destekli yakın/uzak vade analizi**: Piyasa ve tek hisse analizleri;
+  haberlerin olası etkisi, teknik görünüm, **1-4 hafta** ve **3-12 ay** vadeli
+  senaryolar, destek/direnç bantları ve riskler.
+- **Çok kullanıcılı API anahtarı**: Her kullanıcı kendi anahtarını tarayıcısında
+  saklar; sunucu anahtarı kalıcı olarak kaydetmez.
+- **Apple Liquid Glass teması**: Buzlu cam paneller, ışık kırılmalı kenarlıklar
+  ve dinamik ortam ışığı (yerleşim birebir korunmuştur).
 
-- **Gram Altin**, **Ceyrek Altin**, **Tam Altin**, **Ons Altin** (TL cinsinden)
-- Veri kaynagi: Yahoo Finance `GC=F` (ons/USD) ve `TRY=X` (USD/TRY)
-- 1 ons = 31.1034768 gram ile hesaplanir; ceyrek = 1.75 g, tam = 7 g
-- Yerel sarfiyat fiyatlarindan (haremaltin.com vb.) farkli olabilir;
-  kesin alis/satis fasi degildir
-- Sunucu tarafinda **5 dakika** onbelleklenir
+## Altın fiyatları
 
-API: `GET /api/gold` (5 dk onbellekli)
+- **Gram / Çeyrek / Tam altın**: [Truncgil Finans](https://finans.truncgil.com/today.json)
+  JSON servisinden **doğrudan satış fiyatı** olarak alınır (TL).
+- **Ons altın**: aynı kaynaktan **USD/ons** olarak alınır; TL'ye çevrilmez.
+- Veri **60 saniye** önbelleklenir; kaynak saat bilgisi panelde gösterilir.
+- Truncgil'e erişilemezse Yahoo Finance (`GC=F` + `TRY=X`) yedek hesaplaması
+  devreye girer ve panelde **"Yedek kaynak · Hesaplanan değerler"** yazar.
+- Fiyatlar bilgi amaçlıdır; kuyumcu alış/satış farkı ve yerel fiyatlar farklı
+  olabilir.
 
-## Hizli baslangic
+## Hızlı başlangıç
 
-Iki secenek de ayni siteyi ve ayni API'yi sunar. Harici npm/pip bagimliligi
-**yoktur**.
+İki sunucu da aynı API'yi sunar. Harici npm/pip bağımlılığı yoktur.
 
-### Secenek A - Node.js (18+)
+### Seçenek A — Node.js (18+, önerilen)
 
 ```bash
 node server.js
 ```
 
-### Secenek B - Python (3.8+) — Node.js yoksa
+### Seçenek B — Python (3.8+) — Node.js yoksa
 
-```powershell
+```bash
 py server.py
 ```
 
-Ardindan tarayiciya:
+Ardından tarayıcıda:
 
 ```
-http://localhost:3000
+http://localhost:3010
 ```
 
-Farkli bir port icin:
+Windows kısayolu: `BIST100 Baslat.bat` (Node sunucusunu açar ve tarayıcıyı
+başlatır).
 
-```powershell
-$env:PORT=8080; node server.js      # Node
-$env:PORT=8080; py server.py        # Python
+> Varsayılan port **3010**'dur. 3000 portu başka bir uygulama tarafından
+> kullanılıyorsa çakışmayı önlemek için bu port seçilmiştir. Farklı bir port
+> için `PORT` ortam değişkenini kullanın (örn. PowerShell:
+> `$env:PORT=8080; node server.js`).
+
+## AI API anahtarı (EVREN / NVIDIA / diğer)
+
+Uygulama içindeki **🔑 API Ayarları** penceresinden anahtar girilir. Anahtar
+yalnızca tarayıcıda (`localStorage`) saklanır ve AI isteklerinde
+`X-AI-Key` / `X-AI-Base` / `X-AI-Model` başlıklarıyla sunucuya iletilir.
+
+### EVREN (T.C. SSB Milli Yapay Zeka Platformu) — önerilen
+
+1. [evren.ssyz.org.tr](https://evren.ssyz.org.tr) adresine e-Devlet ile giriş
+   yapın.
+2. **API Anahtarları** sayfasından `evren_llm_...` biçiminde bir anahtar
+   oluşturun.
+3. Uygulamada **🔑 API Ayarları → Sağlayıcı: EVREN** seçin; anahtarı yapıştırın.
+   Sunucu adresi otomatik olarak
+   `https://evren-llmapi.ssyz.org.tr/v1/chat/completions` olur.
+4. **Bağlantıyı Test Et** → **Kaydet & Etkinleştir**.
+
+EVREN kullanım şartları ilk istekte otomatik onaylanır
+(`/v1/terms/status` → `/v1/terms/accept`). Model listesi **↻ Modelleri Getir**
+ile hesabınızdan çekilebilir (`auto`, `glm-5.3`, `deepseek-v4.1-flash`,
+`mimo-v2.6-pro`, `qwen3.8-flash-next`, `gemma-4-31b`, `qwen3-vl-30b`).
+
+### NVIDIA NIM / OpenAI / OpenRouter / Groq / DeepSeek
+
+Sağlayıcıyı seçin; Base URL ve önerilen modeller otomatik dolar. İsterseniz
+Model kutusunda **Özel model kimliği** ile farklı bir model girebilirsiniz.
+
+### Sunucu varsayılanı (opsiyonel)
+
+`.env` dosyası oluşturup sunucu geneli varsayılan anahtar tanımlayabilirsiniz.
+Tarayıcıda kayıtlı anahtar yoksa bu varsayılan kullanılır:
+
+```
+AI_API_KEY=evren_llm_...
+AI_API_BASE=https://evren-llmapi.ssyz.org.tr/v1/chat/completions
+AI_MODEL=auto
 ```
 
-## AI / NVIDIA kurulumu
+> `.env` dosyası `.gitignore` ile hariç tutulur; gerçek anahtar commit edilmez.
+> Çok kullanıcılı kullanımda `.env` yerine her kullanıcının kendi anahtarını
+> arayüzden girmesi önerilir.
 
-AI analiz ozelligini kullanmak icin bir NVIDIA NIM API anahtari gerekir:
+## API rotaları
 
-1. [build.nvidia.com](https://build.nvidia.com) adresinden `nvapi-...` baslangicli
-   bir API anahtari edinin.
-2. Proje kokunden `.env.example` dosyasinin bir kopyasini olusturun:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-3. `.env` dosyasini acip `AI_API_KEY` satirina gercek anahtarini yapistirin:
-
-```
-AI_API_KEY=nvapi-SIZIN_ANAHTARINIZ
-AI_API_BASE=https://integrate.api.nvidia.com/v1/chat/completions
-AI_MODEL=nvidia/nemotron-3.5-super-vl-120b-a12b
-```
-
-4. Sunucuyu baslatın. `.env` otomatik olarak yuklenir (`lib/env.js` Node icin,
-   `_load_env_file()` Python icin).
-
-> **Güvenlik:** `.env` dosyasi asla commit edilmez (`.gitignore` ile haric
-> tutulur). GitHub'a sadece `.env.example` yer tutucu yuklenir.
-
-## API rotalari (sunucu calisirken)
-
-| Endpoint | Aciklama | Onbellek |
-|---|---|---|
-| `GET /api/overview` | Tum BIST100 ozet verisi | 60 sn |
-| `GET /api/formations` | Boga (yukselis) formasyonlari | 15 dk |
-| `GET /api/ai-formations` | Formasyon + AI dogrulama | 30 dk |
-| `GET /api/gold` | Altin fiyati (gram/ceyrek/tam/ons) | 5 dk |
+| Endpoint | Açıklama | Önbellek |
+| --- | --- | --- |
+| `GET /api/overview` | Tüm BIST100 özet verisi | 60 sn |
+| `GET /api/formations?dir=bullish\|bearish\|all` | Gelişmiş formasyon taraması | 15 dk |
+| `GET /api/ai-formations?dir=...` | Formasyon + AI doğrulama/karşılaştırma | 30 dk (anahtar bazlı) |
+| `GET /api/gold` | Gram/Çeyrek/Tam (TL) + Ons (USD) — Truncgil Finans | 60 sn |
 | `GET /api/chart?symbol=X&range=1y` | Mum grafiği | 5 dk |
-| `GET /api/news?q=...` | Google Haberler | 10 dk |
-| `GET /api/ai-analysis` | Piyasa yorumu | 10 dk |
-| `GET /api/ai-analysis-stock?symbol=X` | Tek hisse yorumu | — |
-| `GET /api/ai-config` | AI ayarlarini getir (genel) | — |
-| `POST /api/ai-config` | AI ayarlarini kaydet (anahtar, base URL, model) | — |
-| `POST /api/ai-test` | AI baglantisini test et | — |
+| `GET /api/news?symbol=X` | Google Haberler | 10 dk |
+| `GET /api/ai-analysis` | Haber + formasyon destekli piyasa analizi | 10 dk (anahtar bazlı) |
+| `GET /api/ai-analysis-stock?symbol=X&horizon=all` | Tek hisse, yakın/uzak vade | 10 dk (anahtar bazlı) |
+| `GET /api/ai-models` | Hesaba tanımlı modeller | — |
+| `GET /api/ai-config` | Sunucu varsayılan ayar durumu | — |
+| `POST /api/ai-test` | Bağlantı testi | — |
 
-## Ek / yenilenmis ozellikler
+AI rotaları anahtarı istek başlıklarından okur; `?fresh=1` önbelleği atlar.
 
-- **Altin takibi**: `GC=F` ve `TRY=X` üzerinden gram/ceyrek/tam/ons altin
-  fiyatlari, sol panelde ayrı bir kartta.
-- **Varliklarim (portfoy)**: `💼 Varlıklarım` butonuyla hisse, adet, alis
-  fiyati ve tarih kaydedilebilir; veriler tarayici hafizasinda (localStorage)
-  saklanir ve formasyon taramasi ile tahmini satis hedefi karsilastirilir.
-- **Dusush formasyonlari**: Yukselis ile beraber dustugu icin de tarama
-  yapilir; bullish ve bearish sonuclari yan yana ve AI karsilastirmasi ile
-  sunulur.
-- **Calisma aninda AI ayari**: API anahtari, base URL ve model secenegi
-  tarayici uzerinden degistirilebilir ve `Bağlantıyı Test Et` ile dogrulanir.
-
-## Veri kaynaklari
-
-- **Fiyat / grafik verisi**: Yahoo Finance (BIST sembolleri `.IS` uzantisi ile).
-- **Altin fiyati**: Yahoo Finance `GC=F` (altin ons/USD) + `TRY=X` (USD/TRY).
-- **Haberler**: Google Haberler RSS (Turkce).
-- **AI**: NVIDIA NIM (OpenAI uyumlu `/v1/chat/completions`),
-  `nvidia/nemotron-3.5-super-vl-120b-a12b`.
-
-Sunucu, tarayicinin yasadigi CORS kisitlamasini asmak icin Yahoo ve haber
-uclarina proxy'lik yapar.
-
-## Proje yapisi
+## Proje yapısı
 
 ```
-server.js            HTTP sunucusu + API proxy + onbellek (Node)
-server.py            Ayni sunucunun Python (standart kutuphane) surumu
-lib/env.js           Bagimliliksiz .env yukleyici (Node)
-lib/ai.js            AI istemcisi (NVIDIA NIM / Nemotron)
-lib/yahoo.js         Yahoo Finance istemcisi (crumb/cerez, spark, quote, chart)
+server.js            HTTP sunucusu + API proxy + önbellek (Node, birincil)
+server.py            Aynı API'nin Python stdlib sürümü (yedek)
+lib/env.js           Bağımlılıksız .env yükleyici
+lib/ai.js            AI istemcisi (EVREN/NVIDIA/OpenAI uyumlu, terms akışı)
+lib/yahoo.js         Yahoo Finance istemcisi
+lib/gold.js          Altın kaynağı (Truncgil Finans + Yahoo yedek)
 lib/news.js          Google Haberler RSS istemcisi
-lib/patterns.js      Klasik formasyon tespit motoru (yukselis + dustug)
-lib/patterns.py      Python karsiligi (formasyon motoru)
-data/bist100.js      BIST100 sembol listesi (Turkce adlarla) - tek kaynak
-public/index.html    Arayuz iskeleti
-public/styles.css    Karanlik tema stilleri
-public/app.js        Istemci mantigi + canvas mum grafigi + altin/varlik/ai-ayari
+lib/patterns.js      Gelişmiş formasyon tespit motoru + göstergeler
+data/bist100.js      BIST100 sembol listesi (tek kaynak)
+public/index.html    Arayüz iskeleti
+public/styles.css    Temel karanlık tema
+public/glass.css     Apple Liquid Glass tema katmanı
+public/app.js        İstemci mantığı + canvas mum grafiği + AI/portföy
 ```
 
-Her iki sunucu da `data/bist100.js` dosyasini tek kaynak olarak okur;
-listesini guncellemek icin sadece o dosyayi degistirmeniz yeterlidir.
+## Veri kaynakları
 
-## Notlar ve uyari
+- **Fiyat / grafik**: Yahoo Finance (BIST sembolleri `.IS` uzantılı).
+- **Altın**: Truncgil Finans `today.json` (doğrudan gram/çeyrek/tam TL, ons USD);
+  erişilemezse yedek olarak Yahoo Finance `GC=F` + `TRY=X` hesaplaması.
+- **Haberler**: Google Haberler RSS (Türkçe, son 7 gün).
+- **AI**: EVREN LLM API, NVIDIA NIM veya OpenAI uyumlu her sağlayıcı.
 
-- Anlik fiyatlar 15 dakika gecikmeli olabilir; Yahoo Finance'in sagladigi
-  veriler bilgi amaclidir.
-- Bu uygulama **yatirim tavsiyesi degildir**. AI yorumlari analiz amaclidir,
-  al-sat tavsiyesi degildir.
-- BIST100 bilesimi zaman zaman degisir; `data/bist100.js` dosyasindan
-  guncellenebilir.
-- AI API cagrilari icin internet erisimi zorunludur.
+## Notlar
+
+- Fiyatlar 15 dakika gecikmeli olabilir; Yahoo Finance verileri bilgi amaçlıdır.
+- Bu uygulama **yatırım tavsiyesi değildir**. AI yorumları analiz amaçlıdır.
+- Python yedek sunucusu temel özellikleri ve AI analizini sunar; gelişmiş
+  formasyon taraması Node.js sunucusunda (`lib/patterns.js`) çalışır.
+- BIST100 bileşimi değişebilir; `data/bist100.js` dosyasından güncellenir.
+- AI API çağrıları için internet erişimi zorunludur.
+- Uygulamayı başka kullanıcılara açarken **HTTPS** kullanın; API anahtarı AI
+  isteklerinde başlık olarak taşınır ve sunucuda kalıcı saklanmaz.
