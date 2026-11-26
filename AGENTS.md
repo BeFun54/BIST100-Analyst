@@ -9,7 +9,7 @@ stdlib (`server.py`, fallback). Hic npm bagimliligi yoktur.
 ## Git
 - Remote: `https://github.com/BeFun54/BIST100-Analyst.git`
 - Branch: `main`
-- Zaten izlenmeyenler (`.gitignore`): `__pycache__/`, `*.pyc`, `.env`, `.env.local`, `node_modules/`, `*.log`
+- Zaten izlenmeyenler (`.gitignore`): `__pycache__/`, `*.pyc`, `.env`, `.env.local`, `node_modules/`, `*.log`, `data/*.db`, `data/*.db-*`, `data/.secret`
 
 ## Commands
 - Baslat (Node): `node server.js`  (port: `PORT` env degiskeni, default `3010`)
@@ -37,6 +37,11 @@ stdlib (`server.py`, fallback). Hic npm bagimliligi yoktur.
   `max_tokens` dusuk verilirse `message.content` bos kalir; analizlerde 8000,
   testte 2048 kullanilir. `extractText` reasoning fallback'i icerir.
 - `.env` (gercek anahtar) asla commit edilmez. Internet erisimi zorunludur.
+- Hesaplar/senkron icin **Node.js 22.5+** gerekir (yerlesik `node:sqlite`).
+  Node 18'de uygulama misafir modunda calisir. Veritabani: `data/bist100.db`.
+- Hesapta saklanan AI anahtari AES-256-GCM ile sifrelenir. Sirlar:
+  `APP_SECRET` env degiskeni veya otomatik `data/.secret` (gitignore).
+  `.secret` kaybolursa kayitli AI anahtarlari cozulemez.
 
 ## Kod yapisi
 - `server.js` — Node HTTP sunucu, tek giris noktasi. API rotalari `/api/` altinda.
@@ -44,6 +49,10 @@ stdlib (`server.py`, fallback). Hic npm bagimliligi yoktur.
   motoru yoktur; temel/AI ozellikleri sunar.
 - `lib/ai.js` — AI istemcisi: saglayici algilama, EVREN terms akisi, per-request
   anahtar, model listesi, formasyon dogrulama, haber destekli promptlar.
+- `lib/db.js` — SQLite hesap katmani (node:sqlite): kullanici, oturum, varlik,
+  favori, sifreli AI anahtari.
+- `lib/auth.js` — sifre hash (scrypt), oturum cerezi, CSRF/hiz siniri yardimlari,
+  AES-256-GCM sifreleme.
 - `lib/patterns.js` — v2 formasyon motoru: trend/geometri/ kirilim tazeligi
   kontrolleri, bayrak/kama duzeltmeleri, RSI/SMA/ATR gostergeleri.
 - `lib/yahoo.js` — Yahoo Finance proxy. `lib/gold.js` — Altin kaynagi:
@@ -54,7 +63,9 @@ stdlib (`server.py`, fallback). Hic npm bagimliligi yoktur.
 - `public/index.html` — Arayuz; `styles.css` temel tema, `glass.css`
   Glassmorphism katmani (yerlesimi degistirmez).
 - `public/app.js` — Istemci: liste/grafik/haber/portfoy, tarayici bazli API
-  anahtari, AI pencereleri, grafikten varlik ekleme.
+  anahtari, AI pencereleri, grafikten varlik ekleme, hesap/senkron.
+- `public/manifest.webmanifest`, `public/sw.js`, `public/icons/` — PWA.
+  Service worker cache adi (`bist100-analist-v2-2`) degisince artirilmalidir.
 
 ## API rotalari (sunucu calisirken)
 - `GET /api/overview` — Tum BIST100 ozet (60 sn)
@@ -64,6 +75,11 @@ stdlib (`server.py`, fallback). Hic npm bagimliligi yoktur.
   (30 dk, anahtar imzasina gore onbellek)
 - `GET /api/chart?symbol=X&range=1y` — Mum grafigi (5 dk)
 - `GET /api/news?symbol=X` — Google Haberler (10 dk)
+- `POST /api/auth/register` — Hesap olustur (e-posta/sifre, scrypt)
+- `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`
+- `PUT/DELETE /api/auth/ai-key` — Hesapta AES-256-GCM sifreli AI anahtari
+- `GET/POST /api/assets`, `POST /api/assets/import`, `DELETE /api/assets/:id`
+- `GET/POST /api/favorites`
 - `GET /api/ai-analysis` — Piyasa analizi (10 dk, anahtar bazli)
 - `GET /api/ai-analysis-stock?symbol=X&horizon=all|short|long` — Hisse analizi
 - `GET /api/ai-models` — Hesaba tanimli modeller (`/v1/models`)

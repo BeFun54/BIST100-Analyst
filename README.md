@@ -12,6 +12,11 @@ web uygulaması.
 - Sağlayıcı seçildiğinde Base URL ve model listesinin otomatik dolması,
   hesaptaki modellerin çekilmesi ve bağlantı testi. Sağlayıcıya özel kullanım
   şartları (ör. EVREN) otomatik yönetilir.
+- **Hesaplar ve cihazlar arası senkron**: e-posta/şifre ile giriş; Varlıklarım ve
+  favoriler hesaba bağlı, başka cihazda aynı hesapla görünür.
+- **PWA**: mobilde ana ekrana eklenebilir; aynı hesap ve API ile çalışır.
+- **Şifreli AI anahtarı**: hesaba kaydedilen anahtar AES-256-GCM ile saklanır;
+  düz metin tutulmaz.
 - **Gelişmiş formasyon motoru**: trend, geometri, kırılım tazeliği ve ihlal
   kontrolleri; RSI/SMA/ATR bağlamı.
 - Formasyonların haber ve fiyat serisiyle **AI doğrulaması**; onay, düzeltme,
@@ -51,6 +56,9 @@ web uygulaması.
 - **Çoklu sağlayıcı + çok kullanıcılı API anahtarı**: OpenAI uyumlu tüm
   sağlayıcılar (NVIDIA NIM, OpenAI, OpenRouter, Groq, DeepSeek, EVREN ve özel
   adresler); her kullanıcı kendi anahtarını tarayıcısında saklar.
+- **Hesap ve cihazlar arası senkron**: 👤 Giriş/Kayıt ile Varlıklarım ve
+  favoriler hesaba bağlanır; başka cihazda aynı hesapla görünür.
+- **PWA**: manifest + service worker ile telefonda uygulama gibi açılır.
 - **Glassmorphism teması**: Buzlu cam paneller, ışık kırılmalı kenarlıklar
   ve dinamik ortam ışığı (yerleşim birebir korunmuştur).
 
@@ -65,11 +73,41 @@ web uygulaması.
 - Fiyatlar bilgi amaçlıdır; kuyumcu alış/satış farkı ve yerel fiyatlar farklı
   olabilir.
 
+## Hesaplar, cihazlar arası senkron ve PWA
+
+- Sağ üstteki **👤 Giriş** ile e-posta/şifre hesabı oluşturulur.
+- **Varlıklarım** ve favoriler hesaba bağlanır; aynı hesapla başka bir cihazda
+  giriş yapınca otomatik görünür.
+- İlk girişte bu cihazdaki yerel varlıklar için **“Aktar / Boş başla”** sorulur;
+  aynı sembol/adet/fiyat/tarih kayıtları tekrar eklenmez.
+- AI anahtarınızı **🔑 API → Hesabıma kaydet** ile **AES-256-GCM** şifreli olarak
+  hesaba kaydedebilirsiniz; cihazlar arasında taşınır. Sunucu anahtarı düz metin
+  saklamaz.
+- Şifreleme anahtarı `APP_SECRET` ortam değişkeninden veya otomatik oluşturulan
+  `data/.secret` dosyasından gelir. **`data/.secret` dosyasını yedekleyin**;
+  kaybolursa hesaptaki AI anahtarları çözülemez.
+- Hesaplar **Node.js 22.5+** (yerleşik `node:sqlite`) gerektirir. Node 18'de
+  uygulama misafir modunda çalışır; Python yedeğinde hesap/senkron yoktur.
+- Veritabanı: `data/bist100.db` (gitignore'da).
+
+### Cihazlar arası kullanım
+
+Sunucunun diğer cihazlardan erişilebilir olması gerekir:
+
+- **Kalıcı:** VPS/cloud sunucu + HTTPS reverse proxy (Caddy/Nginx).
+- **Hızlı test:** `cloudflared tunnel --url http://localhost:3010` ile geçici
+  HTTPS adresi; bu adresi telefonda açıp **“Ana ekrana ekle”** ile PWA olarak
+  yükleyin.
+
+> Güvenlik: güçlü şifre kullanın, uygulamayı HTTPS ile yayınlayın, ortak
+> cihazlarda çıkış yapın ve `data/.secret` ile `data/bist100.db` dosyalarını
+> yedekleyin.
+
 ## Hızlı başlangıç
 
 İki sunucu da aynı API'yi sunar. Harici npm/pip bağımlılığı yoktur.
 
-### Seçenek A — Node.js (18+, önerilen)
+### Seçenek A — Node.js (22.5+ hesaplar için önerilen; 18+ misafir mod)
 
 ```bash
 node server.js
@@ -94,14 +132,17 @@ başlatır).
 > kullanılıyorsa çakışmayı önlemek için bu port seçilmiştir. Farklı bir port
 > için `PORT` ortam değişkenini kullanın (örn. PowerShell:
 > `$env:PORT=8080; node server.js`).
+>
+> Hesap ve cihazlar arası senkron için **Node.js 22.5+** gerekir.
 
 ## AI API anahtarı (OpenAI uyumlu sağlayıcılar)
 
 Uygulama, **OpenAI uyumlu `/v1/chat/completions` API'si sunan tüm sağlayıcılarla**
-çalışır. Anahtar uygulama içindeki **🔑 API** penceresinden girilir; yalnızca
-tarayıcıda (`localStorage`) saklanır ve AI isteklerinde `X-AI-Key` /
-`X-AI-Base` / `X-AI-Model` başlıklarıyla sunucuya iletilir. Sunucu anahtarı
-kalıcı olarak kaydetmez.
+çalışır. Anahtar uygulama içindeki **🔑 API** penceresinden girilir; normalde
+yalnızca tarayıcıda (`localStorage`) saklanır ve AI isteklerinde `X-AI-Key` /
+`X-AI-Base` / `X-AI-Model` başlıklarıyla sunucuya iletilir. Giriş yaptıysanız
+**“Hesabıma kaydet”** seçeneğiyle anahtar **AES-256-GCM** şifreli olarak hesaba
+kaydedilir ve cihazlar arasında kullanılır. Sunucu anahtarı düz metin saklamaz.
 
 ### Desteklenen sağlayıcılar
 
@@ -134,6 +175,9 @@ Tarayıcıda kayıtlı anahtar yoksa bu varsayılan kullanılır:
 AI_API_KEY=...
 AI_API_BASE=https://integrate.api.nvidia.com/v1/chat/completions
 AI_MODEL=nvidia/nemotron-3.5-super-vl-120b-a12b
+
+# Hesapta AI anahtari sifrelemesi icin (opsiyonel; yoksa data/.secret uretilir)
+APP_SECRET=uzun-rastgele-bir-anahtar
 ```
 
 > EVREN örneği: `AI_API_BASE=https://evren-llmapi.ssyz.org.tr/v1/chat/completions`,
@@ -152,6 +196,15 @@ AI_MODEL=nvidia/nemotron-3.5-super-vl-120b-a12b
 | `GET /api/gold` | Gram/Çeyrek/Tam (TL) + Ons (USD) — Truncgil Finans | 60 sn |
 | `GET /api/chart?symbol=X&range=1y` | Mum grafiği | 5 dk |
 | `GET /api/news?symbol=X` | Google Haberler | 10 dk |
+| `POST /api/auth/register` | Hesap oluştur (e-posta/şifre) | — |
+| `POST /api/auth/login` | Giriş / oturum çerezi | — |
+| `POST /api/auth/logout` | Çıkış | — |
+| `GET /api/auth/me` | Oturum bilgisi | — |
+| `PUT/DELETE /api/auth/ai-key` | Hesapta şifreli AI anahtarı | — |
+| `GET/POST /api/assets` | Kullanıcı varlıkları | — |
+| `POST /api/assets/import` | Yerel varlıkları hesaba aktar | — |
+| `DELETE /api/assets/:id` | Varlık sil | — |
+| `GET/POST /api/favorites` | Kullanıcı favorileri | — |
 | `GET /api/ai-analysis` | Haber + formasyon destekli piyasa analizi | 10 dk (anahtar bazlı) |
 | `GET /api/ai-analysis-stock?symbol=X&horizon=all` | Tek hisse, yakın/uzak vade | 10 dk (anahtar bazlı) |
 | `GET /api/ai-models` | Hesaba tanımlı modeller | — |
@@ -166,6 +219,8 @@ AI rotaları anahtarı istek başlıklarından okur; `?fresh=1` önbelleği atla
 server.js            HTTP sunucusu + API proxy + önbellek (Node, birincil)
 server.py            Aynı API'nin Python stdlib sürümü (yedek)
 lib/env.js           Bağımlılıksız .env yükleyici
+lib/db.js            Hesap veritabanı (node:sqlite; kullanıcı/oturum/varlık/favori)
+lib/auth.js          Şifre hash, oturum çerezi, AES-256-GCM AI anahtarı
 lib/ai.js            AI istemcisi (OpenAI uyumlu tüm sağlayıcılar; terms akışı)
 lib/yahoo.js         Yahoo Finance istemcisi
 lib/gold.js          Altın kaynağı (Truncgil Finans + Yahoo yedek)
@@ -176,6 +231,9 @@ public/index.html    Arayüz iskeleti
 public/styles.css    Temel karanlık tema
 public/glass.css     Glassmorphism tema katmanı
 public/app.js        İstemci mantığı + canvas mum grafiği + AI/portföy
+public/manifest.webmanifest  PWA manifesti
+public/sw.js         Service worker (uygulama kabuğu önbelleği)
+public/icons/        PWA ikonları (192/512 PNG)
 ```
 
 ## Veri kaynakları
@@ -194,6 +252,9 @@ public/app.js        İstemci mantığı + canvas mum grafiği + AI/portföy
 - Python yedek sunucusu temel özellikleri ve AI analizini sunar; gelişmiş
   formasyon taraması Node.js sunucusunda (`lib/patterns.js`) çalışır.
 - BIST100 bileşimi değişebilir; `data/bist100.js` dosyasından güncellenir.
+- Hesap veritabanı `data/bist100.db`, AI anahtarı şifreleme sırrı
+  `data/.secret` (veya `APP_SECRET`). İkisini de yedekleyin; git'e eklemeyin.
+- Python yedeğinde hesap/senkron yoktur; Node.js 22.5+ ile tam özellikler.
 - AI API çağrıları için internet erişimi zorunludur.
 - Uygulamayı başka kullanıcılara açarken **HTTPS** kullanın; API anahtarı AI
   isteklerinde başlık olarak taşınır ve sunucuda kalıcı saklanmaz.

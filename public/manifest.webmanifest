@@ -1,0 +1,29 @@
+{
+  "name": "BIST100 Analist V2",
+  "short_name": "BIST100 V2",
+  "description": "BIST100 canlı takip, gelişmiş formasyon taraması, haber destekli AI analizi ve portföy yönetimi.",
+  "lang": "tr",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
+  "background_color": "#05070d",
+  "theme_color": "#05070d",
+  "categories": ["finance", "business", "productivity"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

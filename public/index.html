@@ -6,6 +6,12 @@
   <title>BIST100 Analist V2 - Canli Borsa Takip</title>
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/glass.css" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="theme-color" content="#05070d" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="BIST100 V2" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <link rel="icon" href="/logo.svg" />
 </head>
 <body>
@@ -35,6 +41,9 @@
       </button>
       <button id="apiKeyBtn" class="btn btn-key" title="AI API anahtarı ayarları">
         🔑 API <span id="apiKeyDot" class="key-dot"></span>
+      </button>
+      <button id="accountBtn" class="btn btn-account" title="Hesap">
+        👤 <span id="accountLabel">Giriş</span>
       </button>
       <button id="refreshBtn" class="btn" title="Verileri yenile">⟳</button>
     </div>
@@ -233,9 +242,15 @@
         <input id="aiConfigModelCustom" class="ai-config-input" type="text" placeholder="Özel model kimliği" style="display:none;" />
 
         <div class="ai-config-help">
-          Anahtar yalnızca <b>bu tarayıcıda</b> saklanır ve AI istekleri sırasında sunucuya iletilir.
-          Sunucu anahtarı kaydetmez. EVREN kullanım şartları ilk istekte otomatik onaylanır.
+          Anahtar varsayılan olarak bu tarayıcıda saklanır. Giriş yaptıysanız
+          <b>“Hesabıma kaydet”</b> ile AES-256-GCM şifreli olarak hesabınıza
+          kaydedilebilir; bu durumda cihazlar arasında kullanılır. Sunucu anahtarı
+          düz metin saklamaz.
         </div>
+        <label id="aiConfigStoreAccountWrap" class="ai-config-check" style="display:none;">
+          <input id="aiConfigStoreAccount" type="checkbox" checked />
+          Bu anahtarı hesabıma şifreli kaydet (cihazlar arası)
+        </label>
 
         <div class="ai-config-actions">
           <button id="aiConfigClearBtn" class="btn" type="button">Temizle</button>
@@ -243,6 +258,74 @@
           <button id="aiConfigSaveBtn" class="btn btn-ai" type="button">Kaydet &amp; Etkinleştir</button>
         </div>
         <div id="aiConfigMessage" class="ai-config-message" style="display:none;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hesap (giris / kayit / senkron) -->
+  <div id="accountModal" class="modal hidden">
+    <div class="modal-box account-box">
+      <div class="modal-head">
+        <div>
+          <h3>👤 Hesap</h3>
+          <span id="accountSub" class="muted">Varlıklarınızı cihazlar arasında senkronize edin</span>
+        </div>
+        <button id="accountClose" class="btn" title="Kapat">✕</button>
+      </div>
+
+      <div id="accountGuest" class="account-body">
+        <div class="account-tabs" role="tablist">
+          <button type="button" class="account-tab active" data-mode="login">Giriş Yap</button>
+          <button type="button" class="account-tab" data-mode="register">Kayıt Ol</button>
+        </div>
+        <label class="ai-config-label">E-posta</label>
+        <input id="accountEmail" class="ai-config-input" type="email" autocomplete="username" placeholder="ornek@eposta.com" />
+        <label class="ai-config-label">Şifre</label>
+        <input id="accountPassword" class="ai-config-input" type="password" autocomplete="current-password" placeholder="En az 8 karakter" />
+        <div id="accountPassword2Wrap" style="display:none;">
+          <label class="ai-config-label">Şifre (tekrar)</label>
+          <input id="accountPassword2" class="ai-config-input" type="password" autocomplete="new-password" placeholder="Şifreyi tekrar girin" />
+        </div>
+        <button id="accountSubmit" class="btn btn-ai account-submit" type="button">Giriş Yap</button>
+        <div id="accountMessage" class="ai-config-message" style="display:none;"></div>
+        <div class="account-hint">
+          Hesap ile <b>Varlıklarım</b> ve favoriler cihazlar arasında senkronize olur.
+          AI anahtarınızı hesabınıza kaydetmek için API ayarlarındaki
+          <b>“Hesabıma kaydet”</b> seçeneğini kullanabilirsiniz.
+        </div>
+      </div>
+
+      <div id="accountLogged" class="account-body" style="display:none;">
+        <div class="account-who">
+          <span class="account-avatar">👤</span>
+          <div>
+            <b id="accountEmailShow"></b>
+            <span class="muted">Oturum açık</span>
+          </div>
+        </div>
+        <div class="account-actions">
+          <button id="accountImportBtn" class="btn" type="button">Bu cihazdaki varlıkları hesaba aktar</button>
+          <button id="accountLogoutBtn" class="btn" type="button">Çıkış Yap</button>
+        </div>
+        <div id="accountLoggedMessage" class="ai-config-message" style="display:none;"></div>
+        <div id="accountImportPrompt" class="account-prompt" style="display:none;">
+          <span id="accountImportText"></span>
+          <div class="account-prompt-actions">
+            <button id="accountImportYes" class="btn btn-ai" type="button">Aktar</button>
+            <button id="accountImportNo" class="btn" type="button">Boş başla</button>
+          </div>
+        </div>
+        <div class="account-hint">
+          Bu hesaba bağlı varlıklar başka bir cihazda aynı e-posta ve şifreyle giriş
+          yaptığınızda otomatik görünür.
+        </div>
+      </div>
+
+      <div id="accountUnavailable" class="account-body" style="display:none;">
+        <div class="ai-config-notice">
+          Hesap özellikleri bu sunucuda kullanılamıyor. Node.js 22.5+ ile
+          <code>node server.js</code> çalıştırın.
+        </div>
       </div>
     </div>
   </div>

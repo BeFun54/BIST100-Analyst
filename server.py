@@ -1356,6 +1356,13 @@ def build_formations():
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+    extensions_map = dict(http.server.SimpleHTTPRequestHandler.extensions_map)
+    extensions_map.update({
+        ".webmanifest": "application/manifest+json; charset=utf-8",
+        ".js": "text/javascript; charset=utf-8",
+        ".css": "text/css; charset=utf-8",
+    })
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=PUBLIC_DIR, **kwargs)
 

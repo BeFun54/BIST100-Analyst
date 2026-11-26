@@ -1,7 +1,7 @@
 {
   "name": "bist100-analist-v2",
-  "version": "2.0.0",
-  "description": "BIST100 Analist V2: canli takip, AI analiz, gelismis formasyon taramasi, haberler ve Glassmorphism tema.",
+  "version": "2.1.0",
+  "description": "BIST100 Analist V2.1: canli takip, AI analiz, formasyon taramasi, hesaplar/cihaz senkronu, PWA ve Glassmorphism tema.",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {

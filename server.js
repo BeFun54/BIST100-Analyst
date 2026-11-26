@@ -5,9 +5,9 @@
  *  - Statik dosya sunumu (public/)
  *  - Yahoo Finance ve haber uclari icin guvenli proxy
  *  - Basit TTL onbellek (cani fiyat verisi icin)
- *  - AI: EVREN / NVIDIA / OpenAI uyumlu saglayicilar
- *  - Kullanici bazli API anahtari: istemci X-AI-Key / X-AI-Base / X-AI-Model
- *    basliklarini gonderir; anahtar sunucuda saklanmaz.
+ *  - AI: OpenAI uyumlu saglayicilar (EVREN/NVIDIA/OpenAI/...)
+ *  - Hesaplar: e-posta + sifre, SQLite, cerez oturumu
+ *  - AI anahtari: hesapta AES-256-GCM ile sifreli saklanabilir
  *
  * Bagimlilik yoktur; sadece "node server.js" ile calisir.
  */
@@ -15,6 +15,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 require('./lib/env'); // proje kokundeki .env dosyasini yukler (varsa)
 
@@ -22,6 +23,8 @@ const yahoo = require('./lib/yahoo');
 const news = require('./lib/news');
 const goldSource = require('./lib/gold');
 const ai = require('./lib/ai');
+const db = require('./lib/db');
+const auth = require('./lib/auth');
 const { BIST100, bySymbol } = require('./data/bist100');
 const {
   PATTERN_LIBRARY,
@@ -107,19 +110,30 @@ function sendJson(res, status, payload) {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
     'Access-Control-Allow-Headers':
       'Content-Type, Accept, X-AI-Key, X-AI-Base, X-AI-Model, X-AI-Provider'
   });
   res.end(body);
 }
 
-/* ISTEK GOVDESI OKUYUCU (JSON POST icin) */
+/* ISTEK GOVDESI OKUYUCU (JSON POST icin, 1 MB sinirli) */
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', (c) => chunks.push(c));
+    let size = 0;
+    let tooBig = false;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > 1024 * 1024) {
+        tooBig = true;
+        chunks.length = 0;
+        return;
+      }
+      if (!tooBig) chunks.push(c);
+    });
     req.on('end', () => {
+      if (tooBig) return reject(new Error('Istek govdesi cok buyuk'));
       const raw = Buffer.concat(chunks).toString('utf8');
       if (!raw) return resolve({});
       try {
@@ -132,8 +146,8 @@ function readBody(req) {
   });
 }
 
-/** Istemcinin gonderdigi kullanici bazli AI ayarlari. */
-function readAiOverrides(req, body) {
+/** Istemcinin gonderdigi kullanici bazli AI ayarlari (basliklar). */
+function readHeaderAiOverrides(req, body) {
   const h = req.headers || {};
   const val = (name) => (h[name] ? String(h[name]).trim() : '');
   const b = body || {};
@@ -145,6 +159,40 @@ function readAiOverrides(req, body) {
   };
 }
 
+function currentUser(req) {
+  if (req._bistUser !== undefined) return req._bistUser;
+  req._bistUser = auth.getSessionUser(req);
+  return req._bistUser;
+}
+
+/**
+ * AI ayarlari: once istek basliklari, yoksa oturum sahibinin hesabinda
+ * sifreli saklanan anahtar.
+ */
+function readAiOverrides(req, body) {
+  const header = readHeaderAiOverrides(req, body);
+  if (header.apiKey) return header;
+  const user = currentUser(req);
+  if (!user) return header;
+  try {
+    const stored = db.getUserAiConfig(user.id);
+    if (stored && stored.apiKeyEnc) {
+      const key = auth.decryptSecret(stored.apiKeyEnc);
+      if (key) {
+        return {
+          apiKey: key,
+          apiBase: stored.apiBase || '',
+          model: stored.model || '',
+          provider: stored.provider || ''
+        };
+      }
+    }
+  } catch (_) {
+    /* veritabani yoksa baslik/env ile devam */
+  }
+  return header;
+}
+
 function hasAiKey(overrides) {
   return !!ai.resolveConfig(overrides).apiKey;
 }
@@ -154,10 +202,53 @@ function isLocalRequest(req) {
   return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
 }
 
+function sameOrigin(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  const host = req.headers.host;
+  if (!host) return true;
+  try {
+    return new URL(origin).host === host;
+  } catch (_) {
+    return false;
+  }
+}
+
+function accountsAvailable(res) {
+  if (db.isAvailable()) return true;
+  sendJson(res, 503, {
+    error: 'Hesap özellikleri için Node.js 22.5+ gerekli',
+    code: 'accounts_unavailable'
+  });
+  return false;
+}
+
+function requireUser(req, res) {
+  const user = currentUser(req);
+  if (!user) {
+    sendJson(res, 401, {
+      error: 'Bu işlem için oturum açmanız gerekiyor',
+      code: 'auth_required'
+    });
+    return null;
+  }
+  return user;
+}
+
+function publicUser(user) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    email: user.email,
+    createdAt: user.createdAt,
+    aiConfigured: !!user.aiConfigured
+  };
+}
+
 function aiKeyRequired(res) {
   return sendJson(res, 400, {
     error: 'AI özellikleri için API anahtarı gerekli',
-    detail: 'Sağ üstteki "🔑 API Ayarları" bölümünden anahtarınızı girin.',
+    detail: 'Sağ üstteki "🔑 API" bölümünden anahtarınızı girin.',
     code: 'ai_key_missing'
   });
 }
@@ -713,11 +804,351 @@ async function handleApi(req, res, urlObj) {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+      'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
       'Access-Control-Allow-Headers':
         'Content-Type, Accept, X-AI-Key, X-AI-Base, X-AI-Model, X-AI-Provider'
     });
     return res.end();
+  }
+
+  // Ayni kaynak disindan gelen yazma isteklerini reddet (CSRF korumasi).
+  if (
+    ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) &&
+    !sameOrigin(req)
+  ) {
+    return sendJson(res, 403, {
+      error: 'Gecersiz istek kaynagi',
+      code: 'csrf_rejected'
+    });
+  }
+
+  /* ---------------------------- hesaplar ---------------------------- */
+
+  if (p === '/api/auth/register') {
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'Yontem desteklemiyor' });
+    if (!accountsAvailable(res)) return;
+    const ip = auth.clientIp(req);
+    const rl = auth.rateLimit('register:' + ip, 8, 15 * 60 * 1000);
+    if (!rl.allowed) {
+      return sendJson(res, 429, {
+        error: 'Cok fazla kayit denemesi. Lutfen biraz sonra tekrar deneyin.',
+        retryAfter: rl.retryAfter
+      });
+    }
+    let body;
+    try {
+      body = await readBody(req);
+    } catch (e) {
+      return sendJson(res, 400, { error: String(e.message || 'Gecersiz istek') });
+    }
+    const email = auth.normalizeEmail(body.email);
+    const password = String(body.password || '');
+    if (!auth.isValidEmail(email)) {
+      return sendJson(res, 400, { error: 'Gecerli bir e-posta adresi girin.' });
+    }
+    if (!auth.isValidPassword(password)) {
+      return sendJson(res, 400, { error: 'Sifre en az 8 karakter olmalidir.' });
+    }
+    try {
+      if (db.findUserByEmail(email)) {
+        return sendJson(res, 409, { error: 'Bu e-posta ile bir hesap zaten var.' });
+      }
+      const { hash, salt } = await auth.hashPassword(password);
+      const row = db.createUser({
+        id: crypto.randomUUID(),
+        email,
+        passwordHash: hash,
+        passwordSalt: salt
+      });
+      auth.createUserSession(req, res, row.id);
+      const user = db.mapUser(row);
+      req._bistUser = user;
+      return sendJson(res, 201, {
+        authenticated: true,
+        accounts: true,
+        user: publicUser(user)
+      });
+    } catch (e) {
+      return sendJson(res, 500, {
+        error: 'Hesap olusturulamadi',
+        detail: String((e && e.message) || e)
+      });
+    }
+  }
+
+  if (p === '/api/auth/login') {
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'Yontem desteklemiyor' });
+    if (!accountsAvailable(res)) return;
+    const ip = auth.clientIp(req);
+    const rl = auth.rateLimit('login:' + ip, 10, 15 * 60 * 1000);
+    if (!rl.allowed) {
+      return sendJson(res, 429, {
+        error: 'Cok fazla giris denemesi. Lutfen biraz sonra tekrar deneyin.',
+        retryAfter: rl.retryAfter
+      });
+    }
+    let body;
+    try {
+      body = await readBody(req);
+    } catch (e) {
+      return sendJson(res, 400, { error: String(e.message || 'Gecersiz istek') });
+    }
+    const email = auth.normalizeEmail(body.email);
+    const password = String(body.password || '');
+    if (!email || !password) {
+      return sendJson(res, 400, { error: 'E-posta ve sifre gerekli.' });
+    }
+    try {
+      const row = db.findUserByEmail(email);
+      const ok =
+        row && (await auth.verifyPassword(password, row.password_hash, row.password_salt));
+      if (!ok) {
+        return sendJson(res, 401, { error: 'E-posta veya sifre hatali.' });
+      }
+      db.purgeExpiredSessions();
+      auth.createUserSession(req, res, row.id);
+      const user = db.mapUser(row);
+      req._bistUser = user;
+      return sendJson(res, 200, {
+        authenticated: true,
+        accounts: true,
+        user: publicUser(user)
+      });
+    } catch (e) {
+      return sendJson(res, 500, {
+        error: 'Giris yapilamadi',
+        detail: String((e && e.message) || e)
+      });
+    }
+  }
+
+  if (p === '/api/auth/logout') {
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'Yontem desteklemiyor' });
+    auth.destroySession(req, res);
+    req._bistUser = null;
+    return sendJson(res, 200, { ok: true });
+  }
+
+  if (p === '/api/auth/me') {
+    if (req.method !== 'GET') return sendJson(res, 405, { error: 'Yontem desteklemiyor' });
+    if (!accountsAvailable(res)) return;
+    const user = currentUser(req);
+    if (!user) {
+      return sendJson(res, 200, {
+        authenticated: false,
+        accounts: true
+      });
+    }
+    return sendJson(res, 200, {
+      authenticated: true,
+      accounts: true,
+      user: publicUser(user)
+    });
+  }
+
+  if (p === '/api/auth/ai-key') {
+    if (!accountsAvailable(res)) return;
+    const user = requireUser(req, res);
+    if (!user) return;
+    if (req.method === 'DELETE') {
+      try {
+        db.clearUserAiConfig(user.id);
+        return sendJson(res, 200, { ok: true, configured: false, source: 'account' });
+      } catch (e) {
+        return sendJson(res, 500, {
+          error: 'Anahtar silinemedi',
+          detail: String((e && e.message) || e)
+        });
+      }
+    }
+    if (req.method !== 'PUT' && req.method !== 'POST') {
+      return sendJson(res, 405, { error: 'Yontem desteklemiyor' });
+    }
+    let body;
+    try {
+      body = await readBody(req);
+    } catch (e) {
+      return sendJson(res, 400, { error: String(e.message || 'Gecersiz istek') });
+    }
+    const apiKey = String(body.apiKey || '').trim();
+    if (!apiKey || apiKey.length > 4096) {
+      return sendJson(res, 400, { error: 'Gecerli bir API anahtari girin.' });
+    }
+    const provider = String(body.provider || '').slice(0, 40);
+    const apiBase = String(body.apiBase || '').slice(0, 500);
+    const model = String(body.model || '').slice(0, 200);
+    try {
+      const enc = auth.encryptSecret(apiKey);
+      const updated = db.setUserAiConfig(user.id, {
+        apiKeyEnc: enc,
+        provider,
+        apiBase,
+        model
+      });
+      req._bistUser = updated;
+      return sendJson(res, 200, {
+        ok: true,
+        config: {
+          configured: true,
+          provider: updated.aiProvider || provider,
+          apiBase: updated.aiBase || apiBase,
+          model: updated.aiModel || model,
+          source: 'account'
+        }
+      });
+    } catch (e) {
+      return sendJson(res, 500, {
+        error: 'Anahtar kaydedilemedi',
+        detail: String((e && e.message) || e)
+      });
+    }
+  }
+
+  /* ---------------------------- varliklar --------------------------- */
+
+  if (p === '/api/assets') {
+    if (!accountsAvailable(res)) return;
+    const user = requireUser(req, res);
+    if (!user) return;
+    if (req.method === 'GET') {
+      try {
+        return sendJson(res, 200, { assets: db.listAssets(user.id) });
+      } catch (e) {
+        return sendJson(res, 500, {
+          error: 'Varliklar alinamadi',
+          detail: String((e && e.message) || e)
+        });
+      }
+    }
+    if (req.method === 'POST') {
+      let body;
+      try {
+        body = await readBody(req);
+      } catch (e) {
+        return sendJson(res, 400, { error: String(e.message || 'Gecersiz istek') });
+      }
+      const symbol = String(body.symbol || '').toUpperCase().trim();
+      const qty = Number(body.qty);
+      const buyPrice = Number(body.buyPrice);
+      const buyDate = String(body.buyDate || '').slice(0, 10);
+      if (!/^[A-Z0-9]{2,12}$/.test(symbol)) {
+        return sendJson(res, 400, { error: 'Gecerli bir hisse sembolu girin.' });
+      }
+      if (!isFinite(qty) || qty <= 0) {
+        return sendJson(res, 400, { error: 'Adet sifirdan buyuk olmalidir.' });
+      }
+      if (!isFinite(buyPrice) || buyPrice <= 0) {
+        return sendJson(res, 400, { error: 'Alis fiyati sifirdan buyuk olmalidir.' });
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(buyDate)) {
+        return sendJson(res, 400, { error: 'Gecerli bir alis tarihi girin.' });
+      }
+      try {
+        const asset = db.insertAsset(user.id, {
+          symbol,
+          qty,
+          buyPrice,
+          buyDate,
+          patternName: body.patternName,
+          upsidePct: body.upsidePct,
+          eta: body.eta
+        });
+        return sendJson(res, 201, { asset });
+      } catch (e) {
+        return sendJson(res, 500, {
+          error: 'Varlik kaydedilemedi',
+          detail: String((e && e.message) || e)
+        });
+      }
+    }
+    return sendJson(res, 405, { error: 'Yontem desteklemiyor' });
+  }
+
+  if (p === '/api/assets/import') {
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'Yontem desteklemiyor' });
+    if (!accountsAvailable(res)) return;
+    const user = requireUser(req, res);
+    if (!user) return;
+    let body;
+    try {
+      body = await readBody(req);
+    } catch (e) {
+      return sendJson(res, 400, { error: String(e.message || 'Gecersiz istek') });
+    }
+    const list = Array.isArray(body.assets) ? body.assets : null;
+    if (!list) return sendJson(res, 400, { error: 'assets dizisi gerekli.' });
+    if (list.length > 500) {
+      return sendJson(res, 400, { error: 'Tek seferde en fazla 500 varlik aktarilabilir.' });
+    }
+    try {
+      const result = db.importAssets(user.id, list);
+      return sendJson(res, 200, Object.assign({ ok: true }, result));
+    } catch (e) {
+      return sendJson(res, 500, {
+        error: 'Varliklar aktarilamadi',
+        detail: String((e && e.message) || e)
+      });
+    }
+  }
+
+  const assetMatch = p.match(/^\/api\/assets\/([^/]+)$/);
+  if (assetMatch) {
+    if (req.method !== 'DELETE') {
+      return sendJson(res, 405, { error: 'Yontem desteklemiyor' });
+    }
+    if (!accountsAvailable(res)) return;
+    const user = requireUser(req, res);
+    if (!user) return;
+    try {
+      const removed = db.deleteAsset(user.id, decodeURIComponent(assetMatch[1]));
+      if (!removed) return sendJson(res, 404, { error: 'Varlik bulunamadi' });
+      return sendJson(res, 200, { ok: true });
+    } catch (e) {
+      return sendJson(res, 500, {
+        error: 'Varlik silinemedi',
+        detail: String((e && e.message) || e)
+      });
+    }
+  }
+
+  /* ----------------------------- favoriler -------------------------- */
+
+  if (p === '/api/favorites') {
+    if (!accountsAvailable(res)) return;
+    const user = requireUser(req, res);
+    if (!user) return;
+    if (req.method === 'GET') {
+      try {
+        return sendJson(res, 200, { favorites: db.listFavorites(user.id) });
+      } catch (e) {
+        return sendJson(res, 500, {
+          error: 'Favoriler alinamadi',
+          detail: String((e && e.message) || e)
+        });
+      }
+    }
+    if (req.method === 'POST') {
+      let body;
+      try {
+        body = await readBody(req);
+      } catch (e) {
+        return sendJson(res, 400, { error: String(e.message || 'Gecersiz istek') });
+      }
+      const symbol = String(body.symbol || '').toUpperCase().trim();
+      if (!/^[A-Z0-9]{2,12}$/.test(symbol)) {
+        return sendJson(res, 400, { error: 'Gecerli bir hisse sembolu girin.' });
+      }
+      try {
+        const favorites = db.setFavorite(user.id, symbol, body.favorite !== false);
+        return sendJson(res, 200, { ok: true, favorites });
+      } catch (e) {
+        return sendJson(res, 500, {
+          error: 'Favori guncellenemedi',
+          detail: String((e && e.message) || e)
+        });
+      }
+    }
+    return sendJson(res, 405, { error: 'Yontem desteklemiyor' });
   }
 
   if (p === '/api/overview') {
@@ -1024,7 +1455,39 @@ async function handleApi(req, res, urlObj) {
 
   if (p === '/api/ai-config') {
     if (req.method === 'GET') {
-      const overrides = readAiOverrides(req);
+      const user = currentUser(req);
+      if (user) {
+        let stored = null;
+        try {
+          stored = db.getUserAiConfig(user.id);
+        } catch (_) {
+          stored = null;
+        }
+        if (stored && stored.apiKeyEnc) {
+          const key = auth.decryptSecret(stored.apiKeyEnc);
+          if (key) {
+            const cfg = ai.resolveConfig({
+              apiBase: stored.apiBase || '',
+              model: stored.model || '',
+              provider: stored.provider || ''
+            });
+            return sendJson(res, 200, {
+              configured: true,
+              provider: cfg.provider,
+              apiBase: cfg.apiBase,
+              model: cfg.model,
+              source: 'account'
+            });
+          }
+          return sendJson(res, 200, {
+            configured: false,
+            source: 'account',
+            error: 'Kayitli anahtar cozulemedi; yeniden girin.'
+          });
+        }
+      }
+
+      const overrides = readHeaderAiOverrides(req);
       if (hasAiKey(overrides)) {
         const cfg = ai.resolveConfig(overrides);
         return sendJson(res, 200, {
@@ -1093,6 +1556,7 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
   '.png': 'image/png',
@@ -1145,6 +1609,23 @@ server.requestTimeout = 0;
 server.listen(PORT, () => {
   console.log('BIST100 Analist V2 calisiyor -> http://localhost:' + PORT);
   console.log(BIST100.length + ' hisse yuklendi.');
+  if (db.init()) {
+    try {
+      db.purgeExpiredSessions();
+    } catch (_) {
+      /* yoksay */
+    }
+    console.log('Hesap veritabani hazir: ' + db.DB_PATH);
+    setInterval(() => {
+      try {
+        db.purgeExpiredSessions();
+      } catch (_) {
+        /* yoksay */
+      }
+    }, 60 * 60 * 1000).unref();
+  } else {
+    console.log('Hesap ozellikleri kapali (Node.js 22.5+ gerekli).');
+  }
 });
 
 module.exports = server;

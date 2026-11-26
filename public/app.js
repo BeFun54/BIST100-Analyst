@@ -27,7 +27,10 @@ const state = {
   assets: JSON.parse(localStorage.getItem(ASSET_KEY) || '[]'),
   patternResults: [], // son formasyon taramasi sonuclari (varlik beklentisi icin)
   patternDir: 'bullish', // 'bullish' | 'bearish' | 'all'
-  aiConfig: { configured: false, apiBase: '', model: '' }, // /api/ai-config'den gelen ayar durumu
+  aiConfig: { configured: false, provider: '', apiBase: '', model: '', source: 'browser' },
+  user: null,
+  authAvailable: true,
+  accountMode: 'login',
   openSymbol: null,
   range: '1y',
   favOnly: false,
@@ -102,14 +105,34 @@ function saveFavs() {
 function isFav(sym) {
   return state.favorites.has(sym);
 }
-function toggleFav(sym) {
-  if (state.favorites.has(sym)) state.favorites.delete(sym);
-  else state.favorites.add(sym);
-  saveFavs();
+async function toggleFav(sym) {
+  const next = !state.favorites.has(sym);
+  if (state.user) {
+    try {
+      const res = await fetch('/api/favorites', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ symbol: sym, favorite: next })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Favori güncellenemedi');
+      state.favorites = new Set(data.favorites || []);
+      saveFavs();
+    } catch (e) {
+      console.error(e);
+      return;
+    }
+  } else {
+    if (next) state.favorites.add(sym);
+    else state.favorites.delete(sym);
+    saveFavs();
+  }
   const star = document.querySelector(
     '.stock-row[data-symbol="' + sym + '"] .fav-star'
   );
   if (star) star.classList.toggle('on', isFav(sym));
+  updateFavCount();
   if (state.favOnly) applyFilter();
 }
 function updateFavCount() {
@@ -123,8 +146,11 @@ function updateFavCount() {
  *               upsidePct, eta }  (son iki alan formasyon eklemesinde dolar)
  * ================================================================== */
 
-function saveAssets() {
+function saveAssetsLocal() {
   localStorage.setItem(ASSET_KEY, JSON.stringify(state.assets));
+}
+
+function refreshAssetsUI() {
   updateAssetCount();
   renderAssets();
 }
@@ -159,9 +185,8 @@ function assetTarget(a) {
   return a.buyPrice * (1 + exp.upsidePct / 100);
 }
 
-function addAsset(opts) {
-  state.assets.push({
-    id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+async function addAsset(opts) {
+  const payload = {
     symbol: opts.symbol,
     qty: Number(opts.qty),
     buyPrice: Number(opts.buyPrice),
@@ -169,13 +194,47 @@ function addAsset(opts) {
     patternName: opts.pattern ? opts.pattern.patternName : null,
     upsidePct: opts.pattern ? opts.pattern.upsidePct : null,
     eta: opts.pattern ? opts.pattern.eta || null : null
-  });
-  saveAssets();
+  };
+  if (state.user) {
+    const res = await fetch('/api/assets', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Varlık kaydedilemedi');
+    state.assets.push(data.asset);
+  } else {
+    state.assets.push(
+      Object.assign(
+        {
+          id: Date.now() + '-' + Math.random().toString(36).slice(2, 7)
+        },
+        payload
+      )
+    );
+    saveAssetsLocal();
+  }
+  refreshAssetsUI();
+  return true;
 }
 
-function removeAsset(id) {
+async function removeAsset(id) {
+  if (state.user) {
+    const res = await fetch('/api/assets/' + encodeURIComponent(id), {
+      method: 'DELETE',
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' }
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Varlık silinemedi');
+    }
+  }
   state.assets = state.assets.filter((a) => a.id !== id);
-  saveAssets();
+  if (!state.user) saveAssetsLocal();
+  refreshAssetsUI();
 }
 
 function openAssetsModal() {
@@ -281,7 +340,12 @@ function renderAssets() {
 
     const del = el('button', 'asset-del', '✕');
     del.title = 'Varlığı sil';
-    del.addEventListener('click', () => removeAsset(a.id));
+    del.addEventListener('click', () => {
+      removeAsset(a.id).catch((e) => {
+        console.error(e);
+        alert('Varlık silinemedi: ' + e.message);
+      });
+    });
     row.appendChild(del);
 
     listEl.appendChild(row);
@@ -296,8 +360,384 @@ function renderAssets() {
     fmtPct(totalCost > 0 ? (totalPl / totalCost) * 100 : null) + ')</b></span>';
 }
 
+/* ==================================================================
+ *  Hesap / cihazlar arasi senkron
+ * ================================================================== */
+
+let accountPromptResolver = null;
+
+function updateAccountState() {
+  const btn = document.getElementById('accountBtn');
+  const label = document.getElementById('accountLabel');
+  if (!btn) return;
+  btn.classList.toggle('logged', !!state.user);
+  if (state.user) {
+    if (label) label.textContent = 'Hesabım';
+    btn.title = state.user.email || 'Hesabım';
+  } else {
+    if (label) label.textContent = state.authAvailable ? 'Giriş' : 'Hesap';
+    btn.title = state.authAvailable
+      ? 'Hesap / giriş'
+      : 'Hesap özellikleri için Node.js 22.5+ gerekli';
+  }
+}
+
+async function loadAuth() {
+  try {
+    const res = await fetch('/api/auth/me', {
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' }
+    });
+    if (res.status === 401) {
+      state.user = null;
+      state.authAvailable = true;
+    } else if (res.status === 503) {
+      state.user = null;
+      state.authAvailable = false;
+    } else if (res.ok) {
+      const data = await res.json();
+      state.user = data.user || null;
+      state.authAvailable = data.accounts !== false;
+    } else {
+      state.user = null;
+      state.authAvailable = false;
+    }
+  } catch (_) {
+    state.user = null;
+    state.authAvailable = false;
+  }
+  updateAccountState();
+  return state.user;
+}
+
+function clearAccountMessages() {
+  ['accountMessage', 'accountLoggedMessage'].forEach((id) => {
+    const elMsg = document.getElementById(id);
+    if (elMsg) {
+      elMsg.style.display = 'none';
+      elMsg.textContent = '';
+    }
+  });
+}
+
+function showAccountMessage(text, kind) {
+  const elMsg = document.getElementById('accountMessage');
+  if (!elMsg) return;
+  elMsg.textContent = text;
+  elMsg.className = 'ai-config-message ' + (kind === 'ok' ? 'ok' : 'err');
+  elMsg.style.display = 'block';
+}
+
+function showAccountLoggedMessage(text, kind) {
+  const elMsg = document.getElementById('accountLoggedMessage');
+  if (!elMsg) return;
+  elMsg.textContent = text;
+  elMsg.className = 'ai-config-message ' + (kind === 'ok' ? 'ok' : 'err');
+  elMsg.style.display = 'block';
+}
+
+function showAccountGuestView() {
+  const guest = document.getElementById('accountGuest');
+  const logged = document.getElementById('accountLogged');
+  const unavailable = document.getElementById('accountUnavailable');
+  if (guest) guest.style.display = 'flex';
+  if (logged) logged.style.display = 'none';
+  if (unavailable) unavailable.style.display = 'none';
+}
+
+function showAccountLoggedView() {
+  const guest = document.getElementById('accountGuest');
+  const logged = document.getElementById('accountLogged');
+  const unavailable = document.getElementById('accountUnavailable');
+  const email = document.getElementById('accountEmailShow');
+  if (guest) guest.style.display = 'none';
+  if (logged) logged.style.display = 'flex';
+  if (unavailable) unavailable.style.display = 'none';
+  if (email) email.textContent = state.user ? state.user.email : '';
+  const prompt = document.getElementById('accountImportPrompt');
+  if (prompt) prompt.style.display = 'none';
+}
+
+function setAccountMode(mode) {
+  state.accountMode = mode === 'register' ? 'register' : 'login';
+  document.querySelectorAll('.account-tab').forEach((tab) => {
+    tab.classList.toggle('active', tab.dataset.mode === state.accountMode);
+  });
+  const wrap = document.getElementById('accountPassword2Wrap');
+  const submit = document.getElementById('accountSubmit');
+  const pass = document.getElementById('accountPassword');
+  if (wrap) wrap.style.display = state.accountMode === 'register' ? 'block' : 'none';
+  if (submit) submit.textContent = state.accountMode === 'register' ? 'Kayıt Ol' : 'Giriş Yap';
+  if (pass) {
+    pass.autocomplete = state.accountMode === 'register' ? 'new-password' : 'current-password';
+  }
+  clearAccountMessages();
+}
+
+function openAccountModal() {
+  const modal = document.getElementById('accountModal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  clearAccountMessages();
+  if (!state.authAvailable) {
+    const guest = document.getElementById('accountGuest');
+    const logged = document.getElementById('accountLogged');
+    const unavailable = document.getElementById('accountUnavailable');
+    if (guest) guest.style.display = 'none';
+    if (logged) logged.style.display = 'none';
+    if (unavailable) unavailable.style.display = 'flex';
+    return;
+  }
+  if (state.user) {
+    showAccountLoggedView();
+  } else {
+    showAccountGuestView();
+    setAccountMode('login');
+    const email = document.getElementById('accountEmail');
+    const pass = document.getElementById('accountPassword');
+    const pass2 = document.getElementById('accountPassword2');
+    if (email) email.value = '';
+    if (pass) pass.value = '';
+    if (pass2) pass2.value = '';
+  }
+}
+
+function closeAccountModal() {
+  const modal = document.getElementById('accountModal');
+  if (modal) modal.classList.add('hidden');
+  if (accountPromptResolver) {
+    const resolve = accountPromptResolver;
+    accountPromptResolver = null;
+    const prompt = document.getElementById('accountImportPrompt');
+    if (prompt) prompt.style.display = 'none';
+    resolve(false);
+  }
+}
+
+function showAccountImportPrompt(localAssets) {
+  return new Promise((resolve) => {
+    accountPromptResolver = resolve;
+    const prompt = document.getElementById('accountImportPrompt');
+    const text = document.getElementById('accountImportText');
+    if (text) {
+      text.textContent =
+        'Bu cihazda ' +
+        localAssets.length +
+        ' varlık var. Hesabınıza aktarılsın mı? Aynı kayıtlar tekrar eklenmez.';
+    }
+    if (prompt) prompt.style.display = 'flex';
+  });
+}
+
+function resolveAccountImportPrompt(importNow) {
+  const resolve = accountPromptResolver;
+  accountPromptResolver = null;
+  const prompt = document.getElementById('accountImportPrompt');
+  if (prompt) prompt.style.display = 'none';
+  if (resolve) resolve(!!importNow);
+}
+
+async function syncAccountData(promptImport) {
+  if (!state.user) return;
+  const localFav = new Set(state.favorites);
+  const localAssets = Array.isArray(state.assets) ? state.assets.slice() : [];
+
+  const [assetsRes, favRes] = await Promise.all([
+    fetch('/api/assets', { credentials: 'same-origin', headers: { Accept: 'application/json' } }),
+    fetch('/api/favorites', { credentials: 'same-origin', headers: { Accept: 'application/json' } })
+  ]);
+  if (!assetsRes.ok || !favRes.ok) {
+    throw new Error('Hesap verileri alınamadı');
+  }
+  const assetsData = await assetsRes.json();
+  const favData = await favRes.json();
+  const serverAssets = assetsData.assets || [];
+  const serverFav = new Set(favData.favorites || []);
+
+  const toAdd = [...localFav].filter((sym) => !serverFav.has(sym));
+  if (toAdd.length) {
+    await Promise.allSettled(
+      toAdd.map((symbol) =>
+        fetch('/api/favorites', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ symbol, favorite: true })
+        })
+      )
+    );
+    for (const sym of toAdd) serverFav.add(sym);
+  }
+  state.favorites = serverFav;
+  saveFavs();
+
+  if (promptImport && serverAssets.length === 0 && localAssets.length > 0) {
+    const importNow = await showAccountImportPrompt(localAssets);
+    if (importNow) {
+      const res = await fetch('/api/assets/import', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ assets: localAssets })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Varlıklar aktarılamadı');
+      state.assets = data.assets || [];
+      showAccountLoggedMessage(
+        (data.imported || 0) + ' varlık aktarıldı, ' + (data.skipped || 0) + ' kayıt atlandı.',
+        'ok'
+      );
+    } else {
+      state.assets = serverAssets;
+    }
+  } else {
+    state.assets = serverAssets;
+    if (promptImport && localAssets.length && serverAssets.length) {
+      showAccountLoggedMessage(
+        'Hesabınızda ' +
+          serverAssets.length +
+          ' varlık var. Bu cihazdaki ' +
+          localAssets.length +
+          ' varlığı aktarmak için aşağıdaki butonu kullanabilirsiniz.',
+        'ok'
+      );
+    }
+  }
+
+  refreshAssetsUI();
+  updateFavCount();
+  document.querySelectorAll('.stock-row').forEach((row) => {
+    const star = row.querySelector('.fav-star');
+    if (star) star.classList.toggle('on', state.favorites.has(row.dataset.symbol));
+  });
+  if (state.favOnly) applyFilter();
+  const msgEl = document.getElementById('accountLoggedMessage');
+  if (msgEl && /senkronize ediliyor/i.test(msgEl.textContent || '')) {
+    showAccountLoggedMessage(
+      'Senkronizasyon tamamlandı: ' +
+        state.assets.length +
+        ' varlık, ' +
+        state.favorites.size +
+        ' favori.',
+      'ok'
+    );
+  }
+  await loadAiConfig();
+}
+
+async function submitAccount() {
+  if (!state.authAvailable) return;
+  const email = (document.getElementById('accountEmail') || {}).value || '';
+  const password = (document.getElementById('accountPassword') || {}).value || '';
+  const password2 = (document.getElementById('accountPassword2') || {}).value || '';
+  clearAccountMessages();
+  if (!email.trim() || !password) {
+    showAccountMessage('E-posta ve şifre gerekli.', 'err');
+    return;
+  }
+  if (state.accountMode === 'register' && password !== password2) {
+    showAccountMessage('Şifreler eşleşmiyor.', 'err');
+    return;
+  }
+  if (state.accountMode === 'register' && password.length < 8) {
+    showAccountMessage('Şifre en az 8 karakter olmalıdır.', 'err');
+    return;
+  }
+  const btn = document.getElementById('accountSubmit');
+  const orig = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = state.accountMode === 'register' ? 'Kayıt olunuyor…' : 'Giriş yapılıyor…';
+  }
+  try {
+    const path = state.accountMode === 'register' ? '/api/auth/register' : '/api/auth/login';
+    const res = await fetch(path, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ email: email.trim(), password })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'İşlem başarısız');
+    state.user = data.user || null;
+    state.authAvailable = true;
+    updateAccountState();
+    showAccountLoggedView();
+    showAccountLoggedMessage('Giriş başarılı. Veriler senkronize ediliyor…', 'ok');
+    await syncAccountData(true);
+    const pass = document.getElementById('accountPassword');
+    const pass2 = document.getElementById('accountPassword2');
+    if (pass) pass.value = '';
+    if (pass2) pass2.value = '';
+  } catch (e) {
+    if (state.user) showAccountLoggedMessage(e.message, 'err');
+    else showAccountMessage(e.message, 'err');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  }
+}
+
+async function logoutAccount() {
+  try {
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' },
+      body: '{}'
+    });
+  } catch (_) {
+    /* yoksay */
+  }
+  state.user = null;
+  state.authAvailable = true;
+  state.assets = JSON.parse(localStorage.getItem(ASSET_KEY) || '[]');
+  state.favorites = new Set(JSON.parse(localStorage.getItem(FAV_KEY) || '[]'));
+  refreshAssetsUI();
+  updateFavCount();
+  document.querySelectorAll('.stock-row').forEach((row) => {
+    const star = row.querySelector('.fav-star');
+    if (star) star.classList.toggle('on', state.favorites.has(row.dataset.symbol));
+  });
+  if (state.favOnly) applyFilter();
+  await loadAiConfig();
+  updateAccountState();
+  closeAccountModal();
+}
+
+async function importLocalAssets() {
+  const local = JSON.parse(localStorage.getItem(ASSET_KEY) || '[]');
+  if (!Array.isArray(local) || !local.length) {
+    showAccountLoggedMessage('Bu cihazda aktarılacak varlık yok.', 'err');
+    return;
+  }
+  try {
+    const res = await fetch('/api/assets/import', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ assets: local })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Varlıklar aktarılamadı');
+    state.assets = data.assets || [];
+    refreshAssetsUI();
+    showAccountLoggedMessage(
+      (data.imported || 0) + ' varlık aktarıldı, ' + (data.skipped || 0) + ' kayıt atlandı.',
+      'ok'
+    );
+  } catch (e) {
+    showAccountLoggedMessage(e.message, 'err');
+  }
+}
+
 async function api(path) {
-  const res = await fetch(path, { headers: { Accept: 'application/json' } });
+  const res = await fetch(path, {
+    credentials: 'same-origin',
+    headers: { Accept: 'application/json' }
+  });
   if (!res.ok) {
     let detail = '';
     try {
@@ -1617,23 +2057,29 @@ function buildPatternAddForm(r, onDone) {
   const msg = el('span', 'pc-add-msg');
   form.appendChild(msg);
 
-  form.addEventListener('submit', (e) => {
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!qtyInput.value || !priceInput.value) return;
-    addAsset({
-      symbol: r.symbol,
-      qty: qtyInput.value,
-      buyPrice: priceInput.value,
-      buyDate: dateInput.value,
-      pattern: {
-        patternName: r.patternName,
-        upsidePct: r.upsidePct,
-        eta: r.eta || r.timeframe || null
-      }
-    });
-    msg.textContent = '✓ Eklendi';
-    msg.classList.add('ok');
-    setTimeout(onDone, 900);
+    msg.classList.remove('ok');
+    msg.textContent = 'Kaydediliyor…';
+    try {
+      await addAsset({
+        symbol: r.symbol,
+        qty: qtyInput.value,
+        buyPrice: priceInput.value,
+        buyDate: dateInput.value,
+        pattern: {
+          patternName: r.patternName,
+          upsidePct: r.upsidePct,
+          eta: r.eta || r.timeframe || null
+        }
+      });
+      msg.textContent = '✓ Eklendi';
+      msg.classList.add('ok');
+      setTimeout(onDone, 900);
+    } catch (err) {
+      msg.textContent = '✕ ' + err.message;
+    }
   });
 
   return form;
@@ -1689,26 +2135,32 @@ function buildChartAddForm(sym, onDone) {
   const msg = el('span', 'pc-add-msg');
   form.appendChild(msg);
 
-  form.addEventListener('submit', (e) => {
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!qtyInput.value || !priceInput.value) return;
     const pattern = currentPatternFor(sym);
-    addAsset({
-      symbol: sym,
-      qty: qtyInput.value,
-      buyPrice: priceInput.value,
-      buyDate: dateInput.value,
-      pattern: pattern
-        ? {
-            patternName: pattern.patternName,
-            upsidePct: pattern.upsidePct,
-            eta: pattern.eta || pattern.timeframe || null
-          }
-        : null
-    });
-    msg.textContent = '✓ Eklendi';
-    msg.classList.add('ok');
-    setTimeout(onDone, 900);
+    msg.classList.remove('ok');
+    msg.textContent = 'Kaydediliyor…';
+    try {
+      await addAsset({
+        symbol: sym,
+        qty: qtyInput.value,
+        buyPrice: priceInput.value,
+        buyDate: dateInput.value,
+        pattern: pattern
+          ? {
+              patternName: pattern.patternName,
+              upsidePct: pattern.upsidePct,
+              eta: pattern.eta || pattern.timeframe || null
+            }
+          : null
+      });
+      msg.textContent = '✓ Eklendi';
+      msg.classList.add('ok');
+      setTimeout(onDone, 900);
+    } catch (err) {
+      msg.textContent = '✕ ' + err.message;
+    }
   });
 
   return form;
@@ -1820,7 +2272,7 @@ function detectProviderFromKey(key, fallback) {
 function aiHeaders(extra) {
   const headers = Object.assign({ Accept: 'application/json' }, extra || {});
   const cfg = state.aiConfig || {};
-  if (cfg.apiKey) {
+  if (cfg.apiKey && cfg.source !== 'account') {
     headers['X-AI-Key'] = cfg.apiKey;
     if (cfg.apiBase) headers['X-AI-Base'] = cfg.apiBase;
     if (cfg.model) headers['X-AI-Model'] = cfg.model;
@@ -1833,6 +2285,7 @@ async function aiFetch(path, options) {
   const opts = options || {};
   const res = await fetch(path, {
     ...opts,
+    credentials: 'same-origin',
     headers: aiHeaders(opts.headers)
   });
   if (!res.ok) {
@@ -1857,7 +2310,14 @@ function updateApiKeyState() {
   if (btn) {
     const provider = cfg.provider ? providerPreset(cfg.provider).label : '';
     btn.title = cfg.configured
-      ? 'API anahtarı aktif' + (cfg.source === 'server' ? ' (sunucu varsayılanı)' : provider ? ' · ' + provider : '')
+      ? 'API anahtarı aktif' +
+        (cfg.source === 'account'
+          ? ' (hesapta şifreli)'
+          : cfg.source === 'server'
+          ? ' (sunucu varsayılanı)'
+          : provider
+          ? ' · ' + provider
+          : '')
       : 'AI API anahtarı ayarları';
   }
 }
@@ -1983,6 +2443,63 @@ function modelLabel(id) {
 }
 
 async function loadAiConfig() {
+  if (state.user) {
+    try {
+      const res = await fetch('/api/ai-config', {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' }
+      });
+      const cfg = res.ok ? await res.json() : {};
+      if (cfg && cfg.source === 'account') {
+        if (cfg.configured) {
+          state.aiConfig = {
+            configured: true,
+            provider: cfg.provider || 'evren',
+            apiKey: '',
+            apiBase: cfg.apiBase || AI_PROVIDERS.evren.base,
+            model: cfg.model || AI_PROVIDERS.evren.model,
+            source: 'account'
+          };
+          updateApiKeyState();
+          return state.aiConfig;
+        }
+        const local = readLocalAiConfig();
+        if (local) {
+          state.aiConfig = { ...local, configured: true, source: 'browser' };
+          updateApiKeyState();
+          return state.aiConfig;
+        }
+        state.aiConfig = {
+          configured: false,
+          provider: cfg.provider || 'nvidia',
+          apiKey: '',
+          apiBase: cfg.apiBase || AI_PROVIDERS.nvidia.base,
+          model: cfg.model || AI_PROVIDERS.nvidia.model,
+          source: 'account'
+        };
+        updateApiKeyState();
+        return state.aiConfig;
+      }
+      const local = readLocalAiConfig();
+      if (local) {
+        state.aiConfig = { ...local, configured: true, source: 'browser' };
+      } else {
+        state.aiConfig = {
+          configured: !!cfg.configured,
+          provider: cfg.provider || 'nvidia',
+          apiKey: '',
+          apiBase: cfg.apiBase || AI_PROVIDERS.nvidia.base,
+          model: cfg.model || AI_PROVIDERS.nvidia.model,
+          source: cfg.source || 'server'
+        };
+      }
+      updateApiKeyState();
+      return state.aiConfig;
+    } catch (_) {
+      /* yerel ayara dus */
+    }
+  }
+
   const local = readLocalAiConfig();
   if (local) {
     state.aiConfig = {
@@ -1996,6 +2513,7 @@ async function loadAiConfig() {
 
   try {
     const res = await fetch('/api/ai-config', {
+      credentials: 'same-origin',
       headers: { Accept: 'application/json' }
     });
     const cfg = res.ok ? await res.json() : {};
@@ -2005,7 +2523,7 @@ async function loadAiConfig() {
       apiKey: '',
       apiBase: cfg.apiBase || AI_PROVIDERS.nvidia.base,
       model: cfg.model || AI_PROVIDERS.nvidia.model,
-      source: 'server'
+      source: cfg.source || 'server'
     };
   } catch (_) {
     state.aiConfig = {
@@ -2100,9 +2618,13 @@ function openAiConfigModal(showNotice) {
   const keyInput = document.getElementById('aiConfigKey');
   if (keyInput) {
     const saved = readLocalAiConfig();
+    const accountKey =
+      state.user && cfg.source === 'account' && cfg.configured;
     keyInput.value = '';
     keyInput.type = 'password';
-    keyInput.placeholder = saved
+    keyInput.placeholder = accountKey
+      ? 'Hesabınızda kayıtlı anahtar kullanılacak (değiştirmek için yazın)'
+      : saved
       ? 'Kayıtlı anahtar kullanılacak (değiştirmek için yazın)'
       : preset.hint + ' anahtarınızı girin';
   }
@@ -2110,6 +2632,11 @@ function openAiConfigModal(showNotice) {
   if (hint) hint.textContent = '(' + preset.hint + ')';
   const toggle = document.getElementById('aiConfigKeyToggle');
   if (toggle) toggle.textContent = '👁️';
+
+  const storeWrap = document.getElementById('aiConfigStoreAccountWrap');
+  const storeCheck = document.getElementById('aiConfigStoreAccount');
+  if (storeWrap) storeWrap.style.display = state.user ? 'flex' : 'none';
+  if (storeCheck) storeCheck.checked = !!state.user;
 
   const baseInput = document.getElementById('aiConfigBaseUrl');
   if (baseInput) baseInput.value = effectiveBase;
@@ -2157,9 +2684,18 @@ function configHeaders(cfg) {
   return headers;
 }
 
+function hasAccountAiKey() {
+  return !!(
+    state.user &&
+    state.aiConfig &&
+    state.aiConfig.source === 'account' &&
+    state.aiConfig.configured
+  );
+}
+
 async function testAiConfigFromForm() {
   const cfg = formAiConfig();
-  if (!cfg.apiKey) {
+  if (!cfg.apiKey && !hasAccountAiKey()) {
     showAiConfigMessage('API anahtarı girilmesi zorunludur.', 'err');
     return;
   }
@@ -2212,7 +2748,7 @@ async function testAiConfigFromForm() {
 
 async function fetchAiModelsFromForm() {
   const cfg = formAiConfig();
-  if (!cfg.apiKey) {
+  if (!cfg.apiKey && !hasAccountAiKey()) {
     showAiConfigMessage('Model listesi için API anahtarı girin.', 'err');
     return;
   }
@@ -2284,30 +2820,81 @@ async function saveAiConfigFromForm() {
     return;
   }
 
-  saveLocalAiConfig(cfg);
-  state.aiConfig = { ...cfg, configured: true, source: 'browser' };
+  const storeCheck = document.getElementById('aiConfigStoreAccount');
+  const storeAccount = !!(state.user && storeCheck && storeCheck.checked);
   state.aiMarketSummary = null;
   state.aiStockSummaries = {};
-  updateApiKeyState();
 
-  showAiConfigMessage('Ayarlar bu tarayıcıya kaydedildi. Bağlantı test ediliyor…', 'ok');
-  try {
-    const res = await fetch('/api/ai-test', {
-      method: 'POST',
-      headers: { ...configHeaders(cfg), 'Content-Type': 'application/json' },
-      body: '{}'
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || data.error || 'Bağlantı testi başarısız');
-    showAiConfigMessage(
-      'Kaydedildi ve bağlantı başarılı · ' +
-        providerPreset(data.provider || cfg.provider).label +
-        ' · ' +
-        (data.model || cfg.model),
-      'ok'
-    );
-  } catch (e) {
-    showAiConfigMessage('Kaydedildi ancak bağlantı hatası: ' + e.message, 'err');
+  if (storeAccount) {
+    try {
+      const res = await fetch('/api/auth/ai-key', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(cfg)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Anahtar hesaba kaydedilemedi');
+      clearLocalAiConfig();
+      state.aiConfig = {
+        configured: true,
+        provider: cfg.provider,
+        apiBase: cfg.apiBase,
+        model: cfg.model,
+        apiKey: '',
+        source: 'account'
+      };
+      updateApiKeyState();
+      showAiConfigMessage('Anahtar hesabınıza şifreli kaydedildi. Bağlantı test ediliyor…', 'ok');
+      try {
+        const test = await fetch('/api/ai-test', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: '{}'
+        });
+        const testData = await test.json().catch(() => ({}));
+        if (!test.ok) {
+          throw new Error(testData.detail || testData.error || 'Bağlantı testi başarısız');
+        }
+        showAiConfigMessage(
+          'Hesabınıza kaydedildi ve bağlantı başarılı · ' +
+            providerPreset(testData.provider || cfg.provider).label +
+            ' · ' +
+            (testData.model || cfg.model),
+          'ok'
+        );
+      } catch (e) {
+        showAiConfigMessage('Hesabınıza kaydedildi ancak bağlantı hatası: ' + e.message, 'err');
+      }
+    } catch (e) {
+      showAiConfigMessage('Kayıt başarısız: ' + e.message, 'err');
+      return;
+    }
+  } else {
+    saveLocalAiConfig(cfg);
+    state.aiConfig = { ...cfg, configured: true, source: 'browser' };
+    updateApiKeyState();
+    showAiConfigMessage('Ayarlar bu tarayıcıya kaydedildi. Bağlantı test ediliyor…', 'ok');
+    try {
+      const res = await fetch('/api/ai-test', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { ...configHeaders(cfg), 'Content-Type': 'application/json' },
+        body: '{}'
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || data.error || 'Bağlantı testi başarısız');
+      showAiConfigMessage(
+        'Kaydedildi ve bağlantı başarılı · ' +
+          providerPreset(data.provider || cfg.provider).label +
+          ' · ' +
+          (data.model || cfg.model),
+        'ok'
+      );
+    } catch (e) {
+      showAiConfigMessage('Kaydedildi ancak bağlantı hatası: ' + e.message, 'err');
+    }
   }
 
   // Acik AI pencerelerini tazele.
@@ -2328,12 +2915,27 @@ async function saveAiConfigFromForm() {
 }
 
 async function clearAiConfigFromForm() {
+  const isAccount =
+    state.user && state.aiConfig && state.aiConfig.source === 'account';
   clearLocalAiConfig();
+  if (isAccount) {
+    try {
+      await fetch('/api/auth/ai-key', {
+        method: 'DELETE',
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' }
+      });
+    } catch (_) {
+      /* yoksay */
+    }
+  }
   state.aiMarketSummary = null;
   state.aiStockSummaries = {};
   await loadAiConfig();
   clearAiConfigMessage();
-  if (state.aiConfig.configured) {
+  if (isAccount) {
+    showAiConfigMessage('Hesabınızdaki AI anahtarı silindi.', 'ok');
+  } else if (state.aiConfig.configured) {
     showAiConfigMessage('Tarayıcıdaki anahtar silindi; sunucu varsayılanı kullanılacak.', 'ok');
   } else {
     showAiConfigMessage('API anahtarı silindi. AI özellikleri için yeniden anahtar girin.', 'err');
@@ -2488,11 +3090,29 @@ function switchAITab(tabId) {
  *  Baslatma
  * ================================================================== */
 
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  const register = () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  };
+  if (document.readyState === 'complete') register();
+  else window.addEventListener('load', register, { once: true });
+}
+
 async function init() {
   updateFavCount();
+  registerServiceWorker();
 
-  // AI ayar durumunu kontrol et (once tarayicida kayitli anahtar, yoksa sunucu varsayilani)
+  // Hesap oturumunu ve AI ayar durumunu kontrol et
+  await loadAuth();
   await loadAiConfig();
+  if (state.user) {
+    try {
+      await syncAccountData(false);
+    } catch (e) {
+      console.error(e);
+    }
+  }
 
   const search = document.getElementById('search');
   search.addEventListener('input', () => {
@@ -2539,16 +3159,46 @@ async function init() {
   document.getElementById('assetsModal').addEventListener('click', (e) => {
     if (e.target.id === 'assetsModal') closeAssetsModal();
   });
-  document.getElementById('assetAddForm').addEventListener('submit', (e) => {
+  document.getElementById('assetAddForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const sym = document.getElementById('assetSymbol').value;
     const qty = document.getElementById('assetQty').value;
     const price = document.getElementById('assetPrice').value;
     const date = document.getElementById('assetDate').value;
     if (!sym || !qty || !price) return;
-    addAsset({ symbol: sym, qty, buyPrice: price, buyDate: date });
-    e.target.reset();
+    try {
+      await addAsset({ symbol: sym, qty, buyPrice: price, buyDate: date });
+      e.target.reset();
+    } catch (err) {
+      alert('Varlık eklenemedi: ' + err.message);
+    }
   });
+
+  // Hesap / cihazlar arasi senkron
+  document.getElementById('accountBtn').addEventListener('click', openAccountModal);
+  document.getElementById('accountClose').addEventListener('click', closeAccountModal);
+  document.getElementById('accountModal').addEventListener('click', (e) => {
+    if (e.target.id === 'accountModal') closeAccountModal();
+  });
+  document.querySelectorAll('.account-tab').forEach((tab) => {
+    tab.addEventListener('click', () => setAccountMode(tab.dataset.mode));
+  });
+  document.getElementById('accountSubmit').addEventListener('click', submitAccount);
+  ['accountEmail', 'accountPassword', 'accountPassword2'].forEach((id) => {
+    const inp = document.getElementById(id);
+    if (inp) {
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          submitAccount();
+        }
+      });
+    }
+  });
+  document.getElementById('accountLogoutBtn').addEventListener('click', logoutAccount);
+  document.getElementById('accountImportBtn').addEventListener('click', importLocalAssets);
+  document.getElementById('accountImportYes').addEventListener('click', () => resolveAccountImportPrompt(true));
+  document.getElementById('accountImportNo').addEventListener('click', () => resolveAccountImportPrompt(false));
 
   // AI Analiz butonu
   document.getElementById('aiBtn').addEventListener('click', openAIModal);
@@ -2663,6 +3313,7 @@ async function init() {
       closeAssetsModal();
       closeAIModal();
       closeAiConfigModal();
+      closeAccountModal();
     }
   });
 
