@@ -105,7 +105,8 @@ Sunucunun diğer cihazlardan erişilebilir olması gerekir:
 
 ## Hızlı başlangıç
 
-İki sunucu da aynı API'yi sunar. Harici npm/pip bağımlılığı yoktur.
+İki sunucu da temel API'yi sunar. Hesap/senkron ve gelişmiş formasyon taraması
+**Node.js 22.5+** gerektirir. Harici npm/pip bağımlılığı yoktur.
 
 ### Seçenek A — Node.js (22.5+ hesaplar için önerilen; 18+ misafir mod)
 
@@ -217,7 +218,7 @@ AI rotaları anahtarı istek başlıklarından okur; `?fresh=1` önbelleği atla
 
 ```
 server.js            HTTP sunucusu + API proxy + önbellek (Node, birincil)
-server.py            Aynı API'nin Python stdlib sürümü (yedek)
+server.py            Temel API'nin Python stdlib sürümü (yedek; hesap/senkron yok)
 lib/env.js           Bağımlılıksız .env yükleyici
 lib/db.js            Hesap veritabanı (node:sqlite; kullanıcı/oturum/varlık/favori)
 lib/auth.js          Şifre hash, oturum çerezi, AES-256-GCM AI anahtarı

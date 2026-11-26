@@ -45,8 +45,8 @@ stdlib (`server.py`, fallback). Hic npm bagimliligi yoktur.
 
 ## Kod yapisi
 - `server.js` — Node HTTP sunucu, tek giris noktasi. API rotalari `/api/` altinda.
-- `server.py` — Python karsiligi (ayni API, stdlib only). Gelismis formasyon
-  motoru yoktur; temel/AI ozellikleri sunar.
+- `server.py` — Python karsiligi (temel API, stdlib only). Gelismis formasyon
+  motoru, hesap/senkron ve PWA destegi yoktur; temel/AI ozellikleri sunar.
 - `lib/ai.js` — AI istemcisi: saglayici algilama, EVREN terms akisi, per-request
   anahtar, model listesi, formasyon dogrulama, haber destekli promptlar.
 - `lib/db.js` — SQLite hesap katmani (node:sqlite): kullanici, oturum, varlik,
