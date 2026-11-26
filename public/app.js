@@ -2010,10 +2010,10 @@ async function loadAiConfig() {
   } catch (_) {
     state.aiConfig = {
       configured: false,
-      provider: 'evren',
+      provider: 'nvidia',
       apiKey: '',
-      apiBase: AI_PROVIDERS.evren.base,
-      model: AI_PROVIDERS.evren.model,
+      apiBase: AI_PROVIDERS.nvidia.base,
+      model: AI_PROVIDERS.nvidia.model,
       source: 'browser'
     };
   }
@@ -2088,8 +2088,8 @@ function openAiConfigModal(showNotice) {
   clearAiConfigMessage();
 
   const cfg = state.aiConfig || {};
-  // Anahtar yoksa onerilen saglayici EVREN'dir; sunucu varsayilani varsa onu koru.
-  const provider = cfg.configured && AI_PROVIDERS[cfg.provider] ? cfg.provider : 'evren';
+  // Anahtar yoksa notr varsayilan NVIDIA'dir; kullanici istedigi saglayiciyi secer.
+  const provider = AI_PROVIDERS[cfg.provider] ? cfg.provider : 'nvidia';
   const preset = providerPreset(provider);
   const effectiveBase = cfg.configured ? cfg.apiBase || preset.base : preset.base;
   const effectiveModel = cfg.configured ? cfg.model || preset.model : preset.model;

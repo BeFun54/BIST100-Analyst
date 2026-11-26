@@ -51,8 +51,8 @@ stdlib (`server.py`, fallback). Hic npm bagimliligi yoktur.
   Yahoo `GC=F`/`TRY=X` yedek hesaplamasi.
   `lib/news.js` — Google Haberler RSS.
 - `data/bist100.js` — **Tek kaynak**: BIST100 sembol listesi.
-- `public/index.html` — Arayuz; `styles.css` temel tema, `glass.css` Apple
-  Liquid Glass katmani (yerlesimi degistirmez).
+- `public/index.html` — Arayuz; `styles.css` temel tema, `glass.css`
+  Glassmorphism katmani (yerlesimi degistirmez).
 - `public/app.js` — Istemci: liste/grafik/haber/portfoy, tarayici bazli API
   anahtari, AI pencereleri, grafikten varlik ekleme.
 

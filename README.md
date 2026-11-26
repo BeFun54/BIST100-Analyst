@@ -7,17 +7,18 @@ web uygulaması.
 
 ## V2 yenilikleri
 
-- **EVREN (SSB) başta olmak üzere** NVIDIA, OpenAI, OpenRouter, Groq ve DeepSeek
-  destekli, kullanıcı bazlı API anahtarı yönetimi.
-- EVREN kullanım şartlarının otomatik onayı, model listesinin hesaptan çekilmesi
-  ve bağlantı testi.
+- **OpenAI uyumlu çoklu sağlayıcı desteği**: NVIDIA NIM, OpenAI, OpenRouter,
+  Groq, DeepSeek, EVREN (SSB) ve özel adresler; kullanıcı bazlı API anahtarı.
+- Sağlayıcı seçildiğinde Base URL ve model listesinin otomatik dolması,
+  hesaptaki modellerin çekilmesi ve bağlantı testi. Sağlayıcıya özel kullanım
+  şartları (ör. EVREN) otomatik yönetilir.
 - **Gelişmiş formasyon motoru**: trend, geometri, kırılım tazeliği ve ihlal
   kontrolleri; RSI/SMA/ATR bağlamı.
 - Formasyonların haber ve fiyat serisiyle **AI doğrulaması**; onay, düzeltme,
   eleme ve iki yön karşılaştırması.
 - Haberleri kullanarak **yakın (1-4 hafta) ve uzak (3-12 ay) vadeli** AI tahmini.
 - Grafikten doğrudan **Varlıklarıma Ekle**.
-- **Apple Liquid Glass** teması.
+- **Glassmorphism** teması.
 - Altın fiyatlarının hesaplanmadan **Truncgil Finans**’tan doğrudan çekilmesi.
 
 ## Öne çıkanlar
@@ -47,9 +48,10 @@ web uygulaması.
 - **Haber destekli yakın/uzak vade analizi**: Piyasa ve tek hisse analizleri;
   haberlerin olası etkisi, teknik görünüm, **1-4 hafta** ve **3-12 ay** vadeli
   senaryolar, destek/direnç bantları ve riskler.
-- **Çok kullanıcılı API anahtarı**: Her kullanıcı kendi anahtarını tarayıcısında
-  saklar; sunucu anahtarı kalıcı olarak kaydetmez.
-- **Apple Liquid Glass teması**: Buzlu cam paneller, ışık kırılmalı kenarlıklar
+- **Çoklu sağlayıcı + çok kullanıcılı API anahtarı**: OpenAI uyumlu tüm
+  sağlayıcılar (NVIDIA NIM, OpenAI, OpenRouter, Groq, DeepSeek, EVREN ve özel
+  adresler); her kullanıcı kendi anahtarını tarayıcısında saklar.
+- **Glassmorphism teması**: Buzlu cam paneller, ışık kırılmalı kenarlıklar
   ve dinamik ortam ışığı (yerleşim birebir korunmuştur).
 
 ## Altın fiyatları
@@ -93,32 +95,35 @@ başlatır).
 > için `PORT` ortam değişkenini kullanın (örn. PowerShell:
 > `$env:PORT=8080; node server.js`).
 
-## AI API anahtarı (EVREN / NVIDIA / diğer)
+## AI API anahtarı (OpenAI uyumlu sağlayıcılar)
 
-Uygulama içindeki **🔑 API Ayarları** penceresinden anahtar girilir. Anahtar
-yalnızca tarayıcıda (`localStorage`) saklanır ve AI isteklerinde
-`X-AI-Key` / `X-AI-Base` / `X-AI-Model` başlıklarıyla sunucuya iletilir.
+Uygulama, **OpenAI uyumlu `/v1/chat/completions` API'si sunan tüm sağlayıcılarla**
+çalışır. Anahtar uygulama içindeki **🔑 API** penceresinden girilir; yalnızca
+tarayıcıda (`localStorage`) saklanır ve AI isteklerinde `X-AI-Key` /
+`X-AI-Base` / `X-AI-Model` başlıklarıyla sunucuya iletilir. Sunucu anahtarı
+kalıcı olarak kaydetmez.
 
-### EVREN (T.C. SSB Milli Yapay Zeka Platformu) — önerilen
+### Desteklenen sağlayıcılar
 
-1. [evren.ssyz.org.tr](https://evren.ssyz.org.tr) adresine e-Devlet ile giriş
-   yapın.
-2. **API Anahtarları** sayfasından `evren_llm_...` biçiminde bir anahtar
-   oluşturun.
-3. Uygulamada **🔑 API Ayarları → Sağlayıcı: EVREN** seçin; anahtarı yapıştırın.
-   Sunucu adresi otomatik olarak
-   `https://evren-llmapi.ssyz.org.tr/v1/chat/completions` olur.
-4. **Bağlantıyı Test Et** → **Kaydet & Etkinleştir**.
+| Sağlayıcı | Base URL | Anahtar örneği |
+| --- | --- | --- |
+| NVIDIA NIM | `https://integrate.api.nvidia.com/v1/chat/completions` | `nvapi-...` |
+| OpenAI | `https://api.openai.com/v1/chat/completions` | `sk-...` |
+| OpenRouter | `https://openrouter.ai/api/v1/chat/completions` | `sk-or-...` |
+| Groq | `https://api.groq.com/openai/v1/chat/completions` | `gsk_...` |
+| DeepSeek | `https://api.deepseek.com/chat/completions` | `sk-...` |
+| EVREN (SSB) | `https://evren-llmapi.ssyz.org.tr/v1/chat/completions` | `evren_llm_...` |
+| Özel / Diğer | OpenAI uyumlu adres | — |
 
-EVREN kullanım şartları ilk istekte otomatik onaylanır
-(`/v1/terms/status` → `/v1/terms/accept`). Model listesi **↻ Modelleri Getir**
-ile hesabınızdan çekilebilir (`auto`, `glm-5.3`, `deepseek-v4.1-flash`,
-`mimo-v2.6-pro`, `qwen3.8-flash-next`, `gemma-4-31b`, `qwen3-vl-30b`).
+Sağlayıcı seçildiğinde Base URL ve önerilen modeller otomatik dolar.
+**↻ Modelleri Getir** ile hesabınıza tanımlı modelleri çekebilir, **Özel model
+kimliği** ile farklı bir model girebilirsiniz. **Bağlantıyı Test Et** →
+**Kaydet & Etkinleştir** adımlarıyla ayarı doğrulayabilirsiniz.
 
-### NVIDIA NIM / OpenAI / OpenRouter / Groq / DeepSeek
-
-Sağlayıcıyı seçin; Base URL ve önerilen modeller otomatik dolar. İsterseniz
-Model kutusunda **Özel model kimliği** ile farklı bir model girebilirsiniz.
+> **EVREN (SSB) notu:** [evren.ssyz.org.tr](https://evren.ssyz.org.tr) üzerinden
+> e-Devlet ile `evren_llm_...` anahtarı oluşturulabilir. Kullanım şartları ilk
+> istekte otomatik onaylanır; modeller **↻ Modelleri Getir** ile çekilir.
+> EVREN, desteklenen sağlayıcılardan yalnızca biridir.
 
 ### Sunucu varsayılanı (opsiyonel)
 
@@ -126,11 +131,13 @@ Model kutusunda **Özel model kimliği** ile farklı bir model girebilirsiniz.
 Tarayıcıda kayıtlı anahtar yoksa bu varsayılan kullanılır:
 
 ```
-AI_API_KEY=evren_llm_...
-AI_API_BASE=https://evren-llmapi.ssyz.org.tr/v1/chat/completions
-AI_MODEL=auto
+AI_API_KEY=...
+AI_API_BASE=https://integrate.api.nvidia.com/v1/chat/completions
+AI_MODEL=nvidia/nemotron-3.5-super-vl-120b-a12b
 ```
 
+> EVREN örneği: `AI_API_BASE=https://evren-llmapi.ssyz.org.tr/v1/chat/completions`,
+> `AI_MODEL=auto`. Aynı yöntem OpenAI uyumlu diğer sağlayıcılarda da geçerlidir.
 > `.env` dosyası `.gitignore` ile hariç tutulur; gerçek anahtar commit edilmez.
 > Çok kullanıcılı kullanımda `.env` yerine her kullanıcının kendi anahtarını
 > arayüzden girmesi önerilir.
@@ -159,7 +166,7 @@ AI rotaları anahtarı istek başlıklarından okur; `?fresh=1` önbelleği atla
 server.js            HTTP sunucusu + API proxy + önbellek (Node, birincil)
 server.py            Aynı API'nin Python stdlib sürümü (yedek)
 lib/env.js           Bağımlılıksız .env yükleyici
-lib/ai.js            AI istemcisi (EVREN/NVIDIA/OpenAI uyumlu, terms akışı)
+lib/ai.js            AI istemcisi (OpenAI uyumlu tüm sağlayıcılar; terms akışı)
 lib/yahoo.js         Yahoo Finance istemcisi
 lib/gold.js          Altın kaynağı (Truncgil Finans + Yahoo yedek)
 lib/news.js          Google Haberler RSS istemcisi
@@ -167,7 +174,7 @@ lib/patterns.js      Gelişmiş formasyon tespit motoru + göstergeler
 data/bist100.js      BIST100 sembol listesi (tek kaynak)
 public/index.html    Arayüz iskeleti
 public/styles.css    Temel karanlık tema
-public/glass.css     Apple Liquid Glass tema katmanı
+public/glass.css     Glassmorphism tema katmanı
 public/app.js        İstemci mantığı + canvas mum grafiği + AI/portföy
 ```
 
@@ -177,7 +184,8 @@ public/app.js        İstemci mantığı + canvas mum grafiği + AI/portföy
 - **Altın**: Truncgil Finans `today.json` (doğrudan gram/çeyrek/tam TL, ons USD);
   erişilemezse yedek olarak Yahoo Finance `GC=F` + `TRY=X` hesaplaması.
 - **Haberler**: Google Haberler RSS (Türkçe, son 7 gün).
-- **AI**: EVREN LLM API, NVIDIA NIM veya OpenAI uyumlu her sağlayıcı.
+- **AI**: OpenAI uyumlu her sağlayıcı (NVIDIA NIM, OpenAI, OpenRouter, Groq,
+  DeepSeek, EVREN/SSB ve özel adresler).
 
 ## Notlar
 

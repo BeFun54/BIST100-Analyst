@@ -1,7 +1,7 @@
 {
   "name": "bist100-analist-v2",
   "version": "2.0.0",
-  "description": "BIST100 Analist V2: canli takip, AI analiz, gelismis formasyon taramasi, haberler ve Liquid Glass tema.",
+  "description": "BIST100 Analist V2: canli takip, AI analiz, gelismis formasyon taramasi, haberler ve Glassmorphism tema.",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
