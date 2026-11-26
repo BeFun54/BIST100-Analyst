@@ -1,11 +1,13 @@
-# BIST100 Analist V2
+# BIST100 Analist V2.2
 
 BIST100 hisselerini canlı olarak izleyebileceğiniz; klasik mum (candlestick)
 grafikleri, son 7 günün haberleri, altın fiyatları, gelişmiş teknik formasyon
-taraması ve **haber destekli yapay zeka analizlerini** tek ekranda birleştiren
-web uygulaması.
+taramasi, akıllı portföy takibi ve **haber destekli yapay zeka analizlerini** tek
+ekranda birleştiren web uygulaması.
 
-## V2 yenilikleri
+**Son sürüm:** [v2.2.0 — Akıllı Portföy Takibi ve Bildirimler](https://github.com/BeFun54/BIST100-Analyst/releases/tag/v2.2.0)
+
+## V2.2 yenilikleri
 
 - **OpenAI uyumlu çoklu sağlayıcı desteği**: NVIDIA NIM, OpenAI, OpenRouter,
   Groq, DeepSeek, EVREN (SSB) ve özel adresler; kullanıcı bazlı API anahtarı.
@@ -113,6 +115,8 @@ Sunucunun diğer cihazlardan erişilebilir olması gerekir:
 ## Akıllı takip ve bildirimler
 
 Üst çubuktaki **🔔 Takip** düğmesi portföy uyarılarını açar:
+
+![Takip ve bildirim merkezi](docs/takip-bildirimleri.png)
 
 - **Hedefe yaklaşma**: fiyat, tahmini satış hedefinin seçilen eşiğine (varsayılan
   %90) ulaştığında uyarı.
@@ -268,6 +272,7 @@ public/app.js        İstemci mantığı + canvas mum grafiği + AI/portföy + t
 public/manifest.webmanifest  PWA manifesti
 public/sw.js         Service worker (uygulama kabuğu önbelleği)
 public/icons/        PWA ikonları (192/512 PNG)
+docs/                Ekran görüntüleri (README)
 ```
 
 ## Veri kaynakları
