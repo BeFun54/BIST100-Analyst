@@ -1,6 +1,6 @@
 'use strict';
 
-const CACHE_NAME = 'bist100-analist-v2-2';
+const CACHE_NAME = 'bist100-analist-v2-4';
 const APP_SHELL = [
   '/',
   '/index.html',

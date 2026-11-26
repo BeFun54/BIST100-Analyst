@@ -17,6 +17,9 @@ web uygulaması.
 - **PWA**: mobilde ana ekrana eklenebilir; aynı hesap ve API ile çalışır.
 - **Şifreli AI anahtarı**: hesaba kaydedilen anahtar AES-256-GCM ile saklanır;
   düz metin tutulmaz.
+- **Akıllı takip ve bildirimler**: Varlıklarım'daki hisseler tahmini zirveye
+  yaklaşınca/ulaşınca, sert düşünce ve AI düşüş riski gördüğünde uygulama içi
+  uyarı; AI kontrolü varsayılan 15 dakika, ayarlanabilir.
 - **Gelişmiş formasyon motoru**: trend, geometri, kırılım tazeliği ve ihlal
   kontrolleri; RSI/SMA/ATR bağlamı.
 - Formasyonların haber ve fiyat serisiyle **AI doğrulaması**; onay, düzeltme,
@@ -43,6 +46,10 @@ web uygulaması.
   değilse piyasa gündemi (Google Haberler).
 - **Varlıklarım**: hisse, adet, alış fiyatı ve alış tarihi ile portföy kaydı;
   formasyon beklentisi, tahmini satış hedefi, kâr/zarar takibi (localStorage).
+- **🔔 Takip ve bildirim merkezi**: Varlıklarım'daki her hisse için hedefe
+  yaklaşma/ulaşma, sert düşüş ve AI düşüş riski uyarıları; okunmamış rozeti,
+  geçmiş listesi ve ayarlar paneli. Bildirimler misafirde yerel, hesapta
+  cihazlar arası senkron.
 - **Gelişmiş formasyon motoru**: Çift Dip/Zirve, TOBO/OBO, Yükselen/Düşen
   Üçgen, Fincan-Kulp, Boğa/Ayı Bayrağı, Düşen/Yükselen Kama, Altın/Ölüm
   Kesişimi, Yuvarlak Dip/Tepe. Önceki trend, geometri, kırılım tazeliği ve
@@ -102,6 +109,27 @@ Sunucunun diğer cihazlardan erişilebilir olması gerekir:
 > Güvenlik: güçlü şifre kullanın, uygulamayı HTTPS ile yayınlayın, ortak
 > cihazlarda çıkış yapın ve `data/.secret` ile `data/bist100.db` dosyalarını
 > yedekleyin.
+
+## Akıllı takip ve bildirimler
+
+Üst çubuktaki **🔔 Takip** düğmesi portföy uyarılarını açar:
+
+- **Hedefe yaklaşma**: fiyat, tahmini satış hedefinin seçilen eşiğine (varsayılan
+  %90) ulaştığında uyarı.
+- **Hedefe ulaşma**: fiyat tahmini zirveye ulaştığında/aştığında “kâr
+  realizasyonu değerlendirilebilir” uyarısı.
+- **Sert düşüş**: günlük değişim seçilen eşiği (varsayılan -%5) geçtiğinde uyarı.
+- **AI düşüş riski**: portföydeki hisseler AI ile düzenli kontrol edilir; yüksek
+  risk, zirve bölgesi veya pozisyon azaltma sinyalinde gerekçeli uyarı verilir.
+
+Hedef fiyat olarak önce **AI zirve tahmini**, yoksa kayıtlı formasyon beklentisi
+kullanılır. AI kontrolü varsayılan **15 dakikada** birdir; ayarlardan 5/10/15/30/60
+dakika seçilebilir, kapatılabilir veya **“Şimdi AI kontrolü yap”** ile elle
+çalıştırılabilir. AI çağrıları API kotanızdan kullanır; fiyat hedefi ve sert düşüş
+kontrolleri AI kotası harcamaz (60 saniyede bir).
+
+> Uyarılar bilgilendirme amaçlıdır; yatırım tavsiyesi değildir. Sinyaller geçmiş
+> fiyat/haber verisine dayanır ve geleceği garanti etmez.
 
 ## Hızlı başlangıç
 
@@ -206,8 +234,12 @@ APP_SECRET=uzun-rastgele-bir-anahtar
 | `POST /api/assets/import` | Yerel varlıkları hesaba aktar | — |
 | `DELETE /api/assets/:id` | Varlık sil | — |
 | `GET/POST /api/favorites` | Kullanıcı favorileri | — |
+| `GET/POST/DELETE /api/notifications` | Takip bildirimleri (kullanıcı bazlı) | — |
+| `POST /api/notifications/read` | Bildirimleri okundu işaretle | — |
+| `GET/PUT /api/notification-settings` | Takip/AI kontrol ayarları | — |
 | `GET /api/ai-analysis` | Haber + formasyon destekli piyasa analizi | 10 dk (anahtar bazlı) |
 | `GET /api/ai-analysis-stock?symbol=X&horizon=all` | Tek hisse, yakın/uzak vade | 10 dk (anahtar bazlı) |
+| `POST /api/ai-portfolio-watch` | Portföy zirve/düşüş riski (JSON) | 4 dk (anahtar + portföy bazlı) |
 | `GET /api/ai-models` | Hesaba tanımlı modeller | — |
 | `GET /api/ai-config` | Sunucu varsayılan ayar durumu | — |
 | `POST /api/ai-test` | Bağlantı testi | — |
@@ -220,7 +252,8 @@ AI rotaları anahtarı istek başlıklarından okur; `?fresh=1` önbelleği atla
 server.js            HTTP sunucusu + API proxy + önbellek (Node, birincil)
 server.py            Temel API'nin Python stdlib sürümü (yedek; hesap/senkron yok)
 lib/env.js           Bağımlılıksız .env yükleyici
-lib/db.js            Hesap veritabanı (node:sqlite; kullanıcı/oturum/varlık/favori)
+lib/db.js            Hesap veritabanı (node:sqlite; kullanıcı/oturum/varlık/favori/
+                     bildirim/ayar)
 lib/auth.js          Şifre hash, oturum çerezi, AES-256-GCM AI anahtarı
 lib/ai.js            AI istemcisi (OpenAI uyumlu tüm sağlayıcılar; terms akışı)
 lib/yahoo.js         Yahoo Finance istemcisi
@@ -231,7 +264,7 @@ data/bist100.js      BIST100 sembol listesi (tek kaynak)
 public/index.html    Arayüz iskeleti
 public/styles.css    Temel karanlık tema
 public/glass.css     Glassmorphism tema katmanı
-public/app.js        İstemci mantığı + canvas mum grafiği + AI/portföy
+public/app.js        İstemci mantığı + canvas mum grafiği + AI/portföy + takip
 public/manifest.webmanifest  PWA manifesti
 public/sw.js         Service worker (uygulama kabuğu önbelleği)
 public/icons/        PWA ikonları (192/512 PNG)
@@ -256,6 +289,10 @@ public/icons/        PWA ikonları (192/512 PNG)
 - Hesap veritabanı `data/bist100.db`, AI anahtarı şifreleme sırrı
   `data/.secret` (veya `APP_SECRET`). İkisini de yedekleyin; git'e eklemeyin.
 - Python yedeğinde hesap/senkron yoktur; Node.js 22.5+ ile tam özellikler.
+- Takip bildirimleri hedefe yaklaşma/ulaşma, sert düşüş ve AI risk sinyaline
+  dayanır; geçmiş veriye dayalı tahmindir, kesin satış garantisi vermez.
+- AI portföy kontrolü varsayılan 15 dakikada birdir ve API kotası harcar;
+  ayarlardan sıklık değiştirilebilir veya kapatılabilir.
 - AI API çağrıları için internet erişimi zorunludur.
 - Uygulamayı başka kullanıcılara açarken **HTTPS** kullanın; API anahtarı AI
   isteklerinde başlık olarak taşınır ve sunucuda kalıcı saklanmaz.

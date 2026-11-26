@@ -19,6 +19,29 @@ const RANGES = [
 
 const FAV_KEY = 'bist100_favorites';
 const ASSET_KEY = 'bist100_assets';
+const ALERT_KEY = 'bist100_notifications';
+const ALERT_SETTINGS_KEY = 'bist100_alert_settings';
+const AI_WATCH_KEY = 'bist100_ai_watch';
+
+const ALERT_DEFAULTS = {
+  enabled: true,
+  aiEnabled: true,
+  intervalMin: 15,
+  nearPct: 90,
+  sharpDropPct: 5,
+  aiRiskLevel: 'high'
+};
+
+function readJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const val = JSON.parse(raw);
+    return val == null ? fallback : val;
+  } catch (_) {
+    return fallback;
+  }
+}
 
 const state = {
   items: [],
@@ -31,6 +54,14 @@ const state = {
   user: null,
   authAvailable: true,
   accountMode: 'login',
+  notifications: readJson(ALERT_KEY, []),
+  alertSettings: { ...ALERT_DEFAULTS, ...(readJson(ALERT_SETTINGS_KEY, {}) || {}) },
+  aiWatch: {},
+  aiWatchAt: null,
+  aiWatchError: null,
+  aiWatchBusy: false,
+  aiWatchRetryAt: 0,
+  aiWatchTimer: null,
   openSymbol: null,
   range: '1y',
   favOnly: false,
@@ -217,6 +248,8 @@ async function addAsset(opts) {
     saveAssetsLocal();
   }
   refreshAssetsUI();
+  evaluatePriceAlerts();
+  maybeRunAiWatch();
   return true;
 }
 
@@ -233,6 +266,7 @@ async function removeAsset(id) {
     }
   }
   state.assets = state.assets.filter((a) => a.id !== id);
+  pruneAiWatch();
   if (!state.user) saveAssetsLocal();
   refreshAssetsUI();
 }
@@ -300,9 +334,16 @@ function renderAssets() {
     if (value != null) totalValue += value;
 
     const exp = assetExpectation(a);
-    const target = assetTarget(a);
+    const target = effectiveAssetTarget(a);
+    const aiSig = state.aiWatch && state.aiWatch[a.symbol];
+    const aiTarget =
+      aiSig && aiSig.aiTarget != null && isFinite(Number(aiSig.aiTarget))
+        ? Number(aiSig.aiTarget)
+        : null;
     const progress =
-      target && cur != null ? Math.max(0, Math.min(100, ((cur - a.buyPrice) / (target - a.buyPrice)) * 100)) : null;
+      target && cur != null && target > a.buyPrice
+        ? Math.max(0, Math.min(100, ((cur - a.buyPrice) / (target - a.buyPrice)) * 100))
+        : null;
 
     const row = el('div', 'asset-row');
 
@@ -311,6 +352,15 @@ function renderAssets() {
     symCell.appendChild(
       el('span', 'asset-sub', fmtDate(a.buyDate) + (item ? ' · ' + (item.name || '') : ''))
     );
+    if (aiSig && (aiSig.risk === 'high' || aiSig.action === 'take_profit' || aiSig.action === 'reduce')) {
+      symCell.appendChild(
+        el(
+          'span',
+          'asset-risk ' + (aiSig.risk === 'high' ? 'high' : 'medium'),
+          aiSig.risk === 'high' ? '⚠ yüksek risk' : '⚠ risk'
+        )
+      );
+    }
     row.appendChild(symCell);
 
     row.appendChild(el('span', 'col-num', nf2.format(a.qty)));
@@ -334,7 +384,12 @@ function renderAssets() {
     const tgtCell = el('span', 'col-num asset-target');
     tgtCell.innerHTML = target
       ? '<b>' + fmtPrice(target) + ' ₺</b>' +
-        (progress != null ? '<small>hedefin %' + nf0.format(progress) + 'i</small>' : '')
+        (progress != null ? '<small>hedefin %' + nf0.format(progress) + 'i</small>' : '') +
+        (aiTarget != null && Math.abs(aiTarget - target) > 0.009
+          ? '<small class="ai-target">AI: ' + fmtPrice(aiTarget) + ' ₺</small>'
+          : '')
+      : aiTarget != null
+      ? '<b>' + fmtPrice(aiTarget) + ' ₺</b><small>AI hedefi</small>'
       : '<small>—</small>';
     row.appendChild(tgtCell);
 
@@ -358,6 +413,749 @@ function renderAssets() {
     '<span>Kar/Zarar: <b class="' + cls(totalPl) + '">' +
     (totalPl > 0 ? '+' : '') + nf2.format(totalPl) + ' ₺ (' +
     fmtPct(totalCost > 0 ? (totalPl / totalCost) * 100 : null) + ')</b></span>';
+}
+
+/* ==================================================================
+ *  Takip & Bildirimler
+ *  - Fiyat hedefe yaklasinca / ulasinca uyari
+ *  - Sert dususte uyari
+ *  - AI portfoy kontrolu (varsayilan 15 dk, ayarlanabilir)
+ *  - Misafirde localStorage, hesapta sunucu senkronu
+ * ================================================================== */
+
+const NOTIFY_ICONS = {
+  near_target: '🎯',
+  target_reached: '✅',
+  sharp_drop: '📉',
+  ai_risk: '⚠️',
+  info: '🔔'
+};
+
+function escHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function normalizeAlertSettings(raw) {
+  const s = Object.assign({}, ALERT_DEFAULTS, raw && typeof raw === 'object' ? raw : {});
+  s.enabled = s.enabled !== false;
+  s.aiEnabled = s.aiEnabled !== false;
+  s.intervalMin = [5, 10, 15, 30, 60].includes(Number(s.intervalMin))
+    ? Number(s.intervalMin)
+    : 15;
+  s.nearPct = [80, 85, 90, 95].includes(Number(s.nearPct)) ? Number(s.nearPct) : 90;
+  s.sharpDropPct = [0, 3, 5, 8].includes(Number(s.sharpDropPct))
+    ? Number(s.sharpDropPct)
+    : 5;
+  s.aiRiskLevel = s.aiRiskLevel === 'medium' ? 'medium' : 'high';
+  return s;
+}
+
+function saveAlertSettingsLocal() {
+  try {
+    localStorage.setItem(ALERT_SETTINGS_KEY, JSON.stringify(state.alertSettings));
+  } catch (_) {
+    /* yoksay */
+  }
+}
+
+async function loadAlertSettings() {
+  let remoteHadSettings = false;
+  if (state.user) {
+    try {
+      const res = await fetch('/api/notification-settings', {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.settings) {
+          state.alertSettings = normalizeAlertSettings(data.settings);
+          remoteHadSettings = true;
+        }
+      }
+    } catch (_) {
+      /* yerel ayarla devam */
+    }
+  }
+  state.alertSettings = normalizeAlertSettings(state.alertSettings);
+  saveAlertSettingsLocal();
+  if (state.user && !remoteHadSettings) {
+    try {
+      await fetch('/api/notification-settings', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ settings: state.alertSettings })
+      });
+    } catch (_) {
+      /* yoksay */
+    }
+  }
+  applyAlertSettingsUI();
+  scheduleAiWatch();
+}
+
+function applyAlertSettingsUI() {
+  const s = state.alertSettings || ALERT_DEFAULTS;
+  const chk = (id, v) => {
+    const el = document.getElementById(id);
+    if (el) el.checked = !!v;
+  };
+  const val = (id, v) => {
+    const el = document.getElementById(id);
+    if (el) el.value = String(v);
+  };
+  chk('notifyEnabled', s.enabled);
+  chk('notifyAiEnabled', s.aiEnabled);
+  val('notifyInterval', s.intervalMin);
+  val('notifyNear', s.nearPct);
+  val('notifyDrop', s.sharpDropPct);
+  val('notifyRisk', s.aiRiskLevel);
+}
+
+function showNotifyMessage(text, kind) {
+  const el = document.getElementById('notifySettingsMessage');
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'ai-config-message ' + (kind === 'ok' ? 'ok' : 'err');
+  el.style.display = 'block';
+}
+
+function updateAiWatchStatus() {
+  const el = document.getElementById('notifyStatus');
+  if (!el) return;
+  const s = state.alertSettings || ALERT_DEFAULTS;
+  if (state.aiWatchBusy) {
+    el.textContent = 'AI portföyü kontrol ediyor…';
+    return;
+  }
+  if (state.aiWatchError && state.aiWatchRetryAt > Date.now()) {
+    const mins = Math.max(1, Math.ceil((state.aiWatchRetryAt - Date.now()) / 60000));
+    el.textContent = 'AI kontrolü başarısız (' + state.aiWatchError + '). ' + mins + ' dk sonra yeniden denenecek.';
+    return;
+  }
+  if (!s.enabled) {
+    el.textContent = 'Takip kapalı. Açtığınızda hedef ve risk uyarıları üretilir.';
+    return;
+  }
+  if (!s.aiEnabled) {
+    el.textContent = 'AI kontrolü kapalı; yalnızca fiyat hedefi ve sert düşüş izleniyor.';
+    return;
+  }
+  if (state.aiWatchAt) {
+    const d = new Date(state.aiWatchAt);
+    el.textContent =
+      'Son AI kontrolü: ' +
+      d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) +
+      ' · sıklık: ' +
+      s.intervalMin +
+      ' dk';
+  } else {
+    el.textContent = 'Henüz AI kontrolü yapılmadı. Sıklık: ' + s.intervalMin + ' dk.';
+  }
+}
+
+function refreshNotifyBadge() {
+  const btn = document.getElementById('notifyBtn');
+  const badge = document.getElementById('notifyBadge');
+  if (!btn || !badge) return;
+  const unread = state.notifications.filter((n) => !n.readAt).length;
+  badge.hidden = unread === 0;
+  badge.textContent = unread > 99 ? '99+' : String(unread);
+  btn.classList.toggle('has-unread', unread > 0);
+  btn.title = unread > 0 ? unread + ' yeni bildirim' : 'Takip ve bildirimler';
+}
+
+function fmtNotifyTime(ts) {
+  const d = new Date(Number(ts) || Date.now());
+  if (isNaN(d)) return '';
+  const diff = Date.now() - d.getTime();
+  if (diff < 60000) return 'az önce';
+  if (diff < 3600000) return Math.floor(diff / 60000) + ' dk önce';
+  if (diff < 86400000) return Math.floor(diff / 3600000) + ' sa önce';
+  return (
+    d.toLocaleDateString('tr-TR', { day: '2-digit', month: 'short' }) +
+    ' ' +
+    d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
+  );
+}
+
+function renderNotifications() {
+  const list = document.getElementById('notifyList');
+  if (!list) return;
+  if (!state.notifications.length) {
+    list.innerHTML =
+      '<div class="notify-empty"><b>Henüz bildirim yok.</b><br>' +
+      'Varlıklarınız tahmini zirveye yaklaştığında, sert düştüğünde veya AI düşüş riski gördüğünde burada görünür.</div>';
+    return;
+  }
+  list.innerHTML = state.notifications
+    .map((n) => {
+      const sev = n.severity === 'high' ? 'high' : n.severity === 'medium' ? 'medium' : 'info';
+      const unread = n.readAt ? '' : ' unread';
+      const icon = NOTIFY_ICONS[n.type] || '🔔';
+      const sym = n.symbol
+        ? '<span class="notify-sym">' + escHtml(n.symbol) + '</span>'
+        : '';
+      return (
+        '<div class="notify-item ' +
+        sev +
+        unread +
+        '" data-id="' +
+        escHtml(n.id) +
+        '"' +
+        (n.symbol ? ' data-symbol="' + escHtml(n.symbol) + '"' : '') +
+        '>' +
+        '<span class="notify-icon">' +
+        icon +
+        '</span>' +
+        '<div class="notify-main"><div class="notify-title">' +
+        sym +
+        '<span>' +
+        escHtml(n.title) +
+        '</span></div>' +
+        '<div class="notify-text">' +
+        escHtml(n.body) +
+        '</div></div>' +
+        '<span class="notify-time">' +
+        fmtNotifyTime(n.createdAt) +
+        '</span></div>'
+      );
+    })
+    .join('');
+
+  list.querySelectorAll('.notify-item').forEach((item) => {
+    item.addEventListener('click', () => {
+      item.classList.remove('unread');
+      markNotificationRead(item.dataset.id);
+      const sym = item.dataset.symbol;
+      if (sym) {
+        closeNotifyModal();
+        openModal(sym);
+      }
+    });
+  });
+}
+
+function saveNotificationsLocal() {
+  try {
+    localStorage.setItem(ALERT_KEY, JSON.stringify(state.notifications.slice(0, 100)));
+  } catch (_) {
+    /* yoksay */
+  }
+}
+
+async function loadNotifications() {
+  if (state.user) {
+    try {
+      const res = await fetch('/api/notifications', {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        state.notifications = Array.isArray(data.items) ? data.items : [];
+      }
+    } catch (_) {
+      /* sessiz gec */
+    }
+  } else {
+    state.notifications = readJson(ALERT_KEY, []);
+  }
+  if (!Array.isArray(state.notifications)) state.notifications = [];
+  refreshNotifyBadge();
+  renderNotifications();
+}
+
+function openNotifyModal() {
+  const modal = document.getElementById('notifyModal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  renderNotifications();
+  updateAiWatchStatus();
+  if (state.notifications.some((n) => !n.readAt)) markAllNotificationsRead();
+}
+
+function closeNotifyModal() {
+  const modal = document.getElementById('notifyModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function toggleNotifySettings() {
+  const panel = document.getElementById('notifySettings');
+  if (!panel) return;
+  const show = panel.style.display === 'none' || !panel.style.display;
+  panel.style.display = show ? 'flex' : 'none';
+  if (show) {
+    applyAlertSettingsUI();
+    updateAiWatchStatus();
+  }
+}
+
+async function markAllNotificationsRead() {
+  const now = Date.now();
+  state.notifications.forEach((n) => {
+    if (!n.readAt) n.readAt = now;
+  });
+  if (!state.user) saveNotificationsLocal();
+  refreshNotifyBadge();
+  renderNotifications();
+  if (state.user) {
+    try {
+      const res = await fetch('/api/notifications/read', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: '{}'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.items)) state.notifications = data.items;
+        refreshNotifyBadge();
+        renderNotifications();
+      }
+    } catch (_) {
+      /* yerel isaretleme yeterli */
+    }
+  }
+}
+
+async function markNotificationRead(id) {
+  const n = state.notifications.find((x) => x.id === id);
+  if (!n || n.readAt) return;
+  n.readAt = Date.now();
+  if (!state.user) saveNotificationsLocal();
+  refreshNotifyBadge();
+  if (state.user) {
+    try {
+      await fetch('/api/notifications/read', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ ids: [id] })
+      });
+    } catch (_) {
+      /* yoksay */
+    }
+  }
+}
+
+async function clearNotifications() {
+  if (!state.notifications.length) return;
+  if (!confirm('Tüm bildirimler silinsin mi?')) return;
+  state.notifications = [];
+  if (!state.user) saveNotificationsLocal();
+  refreshNotifyBadge();
+  renderNotifications();
+  if (state.user) {
+    try {
+      await fetch('/api/notifications', {
+        method: 'DELETE',
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' }
+      });
+    } catch (_) {
+      /* yoksay */
+    }
+  }
+}
+
+async function saveAlertSettingsFromUI() {
+  state.alertSettings = normalizeAlertSettings({
+    enabled: (document.getElementById('notifyEnabled') || {}).checked,
+    aiEnabled: (document.getElementById('notifyAiEnabled') || {}).checked,
+    intervalMin: (document.getElementById('notifyInterval') || {}).value,
+    nearPct: (document.getElementById('notifyNear') || {}).value,
+    sharpDropPct: (document.getElementById('notifyDrop') || {}).value,
+    aiRiskLevel: (document.getElementById('notifyRisk') || {}).value
+  });
+  saveAlertSettingsLocal();
+  if (state.user) {
+    try {
+      const res = await fetch('/api/notification-settings', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ settings: state.alertSettings })
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Ayarlar kaydedilemedi');
+      }
+    } catch (e) {
+      showNotifyMessage('Ayarlar kaydedilemedi: ' + e.message, 'err');
+      return;
+    }
+  }
+  scheduleAiWatch();
+  updateAiWatchStatus();
+  showNotifyMessage(
+    'Ayarlar kaydedildi. AI kontrolü her ' + state.alertSettings.intervalMin + ' dakikada bir yapılır.',
+    'ok'
+  );
+}
+
+/* ------------------------- AI izleme onbellegi ---------------------- */
+
+function loadAiWatchCache() {
+  const cached = readJson(AI_WATCH_KEY, null);
+  if (cached && typeof cached === 'object') {
+    state.aiWatch =
+      cached.signals && typeof cached.signals === 'object' ? cached.signals : {};
+    state.aiWatchAt = Number(cached.updatedAt) || null;
+  }
+}
+
+function saveAiWatchCache() {
+  try {
+    localStorage.setItem(
+      AI_WATCH_KEY,
+      JSON.stringify({ signals: state.aiWatch, updatedAt: state.aiWatchAt })
+    );
+  } catch (_) {
+    /* yoksay */
+  }
+}
+
+function pruneAiWatch() {
+  const symbols = new Set(state.assets.map((a) => a.symbol));
+  let changed = false;
+  for (const sym of Object.keys(state.aiWatch)) {
+    if (!symbols.has(sym)) {
+      delete state.aiWatch[sym];
+      changed = true;
+    }
+  }
+  if (changed) saveAiWatchCache();
+}
+
+/** Varlik icin gecerli zirve hedefi: AI hedefi varsa o, yoksa formasyon hedefi. */
+function effectiveAssetTarget(a) {
+  const sig = state.aiWatch && state.aiWatch[a.symbol];
+  if (sig && sig.aiTarget != null && isFinite(Number(sig.aiTarget))) {
+    return Number(sig.aiTarget);
+  }
+  return assetTarget(a);
+}
+
+function alertDay(ts) {
+  const d = new Date(Number(ts) || Date.now());
+  return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+}
+
+/* --------------------------- fiyat uyarilari ------------------------ */
+
+function evaluatePriceAlerts() {
+  if (!state.alertSettings.enabled) return;
+  const now = Date.now();
+  const day = alertDay(now);
+  const near = Number(state.alertSettings.nearPct) || 90;
+  const dropLimit = Number(state.alertSettings.sharpDropPct);
+
+  for (const a of state.assets) {
+    const item = state.bySymbol[a.symbol];
+    if (!item || item.price == null) continue;
+    const cur = Number(item.price);
+    const buy = Number(a.buyPrice);
+    if (!isFinite(cur) || !isFinite(buy) || buy <= 0) continue;
+
+    const target = effectiveAssetTarget(a);
+    if (target != null && isFinite(target) && target > buy) {
+      const rounded = Math.round(target * 100) / 100;
+      const progress = ((cur - buy) / (target - buy)) * 100;
+      if (cur >= target) {
+        pushAlert({
+          symbol: a.symbol,
+          type: 'target_reached',
+          severity: 'high',
+          title: a.symbol + ' tahmini zirveye ulaştı',
+          body:
+            'Fiyat ' +
+            fmtPrice(cur) +
+            ' ₺, hedef ' +
+            fmtPrice(target) +
+            ' ₺. Kâr realizasyonu değerlendirilebilir; yatırım tavsiyesi değildir.',
+          dedupeKey: a.symbol + ':target_reached:' + rounded + ':' + day
+        });
+      } else if (progress >= near) {
+        pushAlert({
+          symbol: a.symbol,
+          type: 'near_target',
+          severity: 'info',
+          title: a.symbol + ' hedefe yaklaşıyor',
+          body:
+            'Fiyat ' +
+            fmtPrice(cur) +
+            ' ₺; tahmini satış hedefinin %' +
+            Math.min(99, Math.round(progress)) +
+            "'ine ulaştı. Hedef: " +
+            fmtPrice(target) +
+            ' ₺.',
+          dedupeKey: a.symbol + ':near_target:' + rounded + ':' + day
+        });
+      }
+    }
+
+    if (dropLimit > 0 && item.changePercent != null) {
+      const chg = Number(item.changePercent);
+      if (isFinite(chg) && chg <= -dropLimit) {
+        pushAlert({
+          symbol: a.symbol,
+          type: 'sharp_drop',
+          severity: 'high',
+          title: a.symbol + ' bugün %' + fmtPrice(Math.abs(chg)) + ' düştü',
+          body:
+            'Günlük değişim ' +
+            fmtPct(chg) +
+            '. Destek seviyelerini ve haber akışını kontrol edin.',
+          dedupeKey: a.symbol + ':sharp_drop:' + day
+        });
+      }
+    }
+  }
+}
+
+async function pushAlert(alert) {
+  if (!state.alertSettings.enabled) return;
+  if (!alert || !alert.dedupeKey) return;
+  if (state.notifications.some((n) => n.dedupeKey === alert.dedupeKey)) return;
+
+  const payload = {
+    symbol: alert.symbol || null,
+    type: alert.type,
+    severity: alert.severity || 'info',
+    title: alert.title,
+    body: alert.body || '',
+    dedupeKey: alert.dedupeKey,
+    createdAt: Date.now()
+  };
+
+  if (state.user) {
+    try {
+      const res = await fetch('/api/notifications', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Bildirim kaydedilemedi');
+      if (!data.created) return;
+      state.notifications.unshift(data.notification);
+      state.notifications = state.notifications.slice(0, 100);
+    } catch (_) {
+      addLocalNotification(payload);
+    }
+  } else {
+    addLocalNotification(payload);
+  }
+
+  refreshNotifyBadge();
+  renderNotifications();
+  showToast(payload);
+}
+
+function addLocalNotification(payload) {
+  const n = Object.assign(
+    {
+      id: 'n-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+      readAt: null
+    },
+    payload
+  );
+  state.notifications.unshift(n);
+  state.notifications = state.notifications.slice(0, 100);
+  if (!state.user) saveNotificationsLocal();
+}
+
+function showToast(n) {
+  const wrap = document.getElementById('toastWrap');
+  if (!wrap) return;
+  const t = document.createElement('div');
+  t.className = 'toast ' + (n.severity || 'info');
+  t.innerHTML =
+    '<span class="toast-icon">' +
+    (NOTIFY_ICONS[n.type] || '🔔') +
+    '</span><div class="toast-main"><div class="toast-title">' +
+    escHtml(n.title) +
+    '</div><div class="toast-text">' +
+    escHtml(n.body) +
+    '</div></div>';
+  t.addEventListener('click', () => {
+    t.remove();
+    openNotifyModal();
+  });
+  wrap.appendChild(t);
+  setTimeout(() => {
+    t.classList.add('out');
+    setTimeout(() => t.remove(), 280);
+  }, 7000);
+  while (wrap.children.length > 3) wrap.firstChild.remove();
+}
+
+/* --------------------------- AI uyarilari --------------------------- */
+
+function applyAiSignals(signals) {
+  const list = Array.isArray(signals) ? signals : [];
+  for (const s of list) {
+    const sym = String(s.symbol || '').toUpperCase();
+    if (!sym) continue;
+    state.aiWatch[sym] = s;
+  }
+  saveAiWatchCache();
+
+  const minRisk = state.alertSettings.aiRiskLevel === 'medium' ? 'medium' : 'high';
+  for (const s of list) {
+    const sym = String(s.symbol || '').toUpperCase();
+    if (!sym) continue;
+    const risk = s.risk === 'high' ? 'high' : s.risk === 'medium' ? 'medium' : 'low';
+    const actionable = s.action === 'take_profit' || s.action === 'reduce';
+    const risky =
+      risk === 'high' ||
+      actionable ||
+      (minRisk === 'medium' && risk === 'medium');
+    if (!risky) continue;
+
+    let title;
+    if (s.action === 'take_profit') {
+      title = sym + ': zirve bölgesi, kâr realizasyonu uyarısı';
+    } else if (s.action === 'reduce') {
+      title = sym + ': düşüş riski, pozisyon azaltma uyarısı';
+    } else {
+      title = sym + ': düşüş riski ' + (risk === 'high' ? 'yüksek' : 'orta');
+    }
+
+    const parts = [];
+    if (s.reason) parts.push(String(s.reason).trim());
+    if (s.aiTarget != null && isFinite(Number(s.aiTarget))) {
+      parts.push('AI zirve tahmini: ' + fmtPrice(s.aiTarget) + ' ₺');
+    }
+    parts.push('Güven: %' + Math.round(Number(s.confidence) || 0));
+    if (actionable) parts.push('Kâr realizasyonu düşünülebilir');
+
+    pushAlert({
+      symbol: sym,
+      type: 'ai_risk',
+      severity: risk === 'high' ? 'high' : 'medium',
+      title,
+      body: parts.join(' · ') + '. Yatırım tavsiyesi değildir.',
+      dedupeKey:
+        sym + ':ai:' + risk + ':' + String(s.action || 'hold') + ':' + alertDay()
+    });
+  }
+
+  renderAssets();
+  updateAiWatchStatus();
+}
+
+async function runAiWatch(manual) {
+  const s = state.alertSettings;
+  if (!manual && (!s.enabled || !s.aiEnabled)) return null;
+  if (!state.assets.length) {
+    if (manual) showNotifyMessage('Önce Varlıklarım bölümüne hisse ekleyin.', 'err');
+    return null;
+  }
+  if (!state.aiConfig || !state.aiConfig.configured) {
+    if (manual) showNotifyMessage('AI kontrolü için önce 🔑 API anahtarını girin.', 'err');
+    return null;
+  }
+  if (state.aiWatchBusy) return null;
+  state.aiWatchBusy = true;
+  updateAiWatchStatus();
+
+  try {
+    const uniq = new Map();
+    for (const a of state.assets) {
+      const item = state.bySymbol[a.symbol] || {};
+      const formationTarget = assetTarget(a);
+      const entry = uniq.get(a.symbol);
+      if (!entry) {
+        uniq.set(a.symbol, {
+          symbol: a.symbol,
+          name: item.name || a.symbol,
+          qty: Number(a.qty) || 0,
+          buyPrice: Number(a.buyPrice) || 0,
+          target: formationTarget,
+          patternName: a.patternName || null
+        });
+      } else {
+        const qty = entry.qty + (Number(a.qty) || 0);
+        entry.buyPrice =
+          qty > 0
+            ? (entry.buyPrice * entry.qty + (Number(a.buyPrice) || 0) * (Number(a.qty) || 0)) / qty
+            : entry.buyPrice;
+        entry.qty = qty;
+        if (!entry.target && formationTarget) entry.target = formationTarget;
+      }
+    }
+
+    const list = [...uniq.values()];
+    const chunks = [];
+    for (let i = 0; i < list.length; i += 10) chunks.push(list.slice(i, i + 10));
+    const allSignals = [];
+    const missing = [];
+    let updatedAt = 0;
+
+    for (const chunk of chunks) {
+      const res = await fetch('/api/ai-portfolio-watch', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: aiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ items: chunk, fresh: manual === true })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || data.error || 'AI kontrolü başarısız');
+      }
+      allSignals.push(...(data.signals || []));
+      missing.push(...(data.missing || []));
+      updatedAt = Math.max(updatedAt, Number(data.updatedAt) || 0);
+    }
+
+    state.aiWatchAt = updatedAt || Date.now();
+    state.aiWatchError = null;
+    state.aiWatchRetryAt = 0;
+    applyAiSignals(allSignals);
+    saveAiWatchCache();
+    if (manual) {
+      showNotifyMessage(
+        'AI kontrolü tamamlandı: ' + allSignals.length + ' hisse değerlendirildi.',
+        'ok'
+      );
+    }
+    return { signals: allSignals, missing, updatedAt: state.aiWatchAt };
+  } catch (e) {
+    state.aiWatchError = e.message;
+    const waitMin = Math.max(5, Number(state.alertSettings.intervalMin) || 15);
+    state.aiWatchRetryAt = Date.now() + waitMin * 60000;
+    updateAiWatchStatus();
+    if (manual) showNotifyMessage('AI kontrolü başarısız: ' + e.message, 'err');
+    return null;
+  } finally {
+    state.aiWatchBusy = false;
+    updateAiWatchStatus();
+  }
+}
+
+function maybeRunAiWatch() {
+  const s = state.alertSettings;
+  if (!s.enabled || !s.aiEnabled) return;
+  if (!state.assets.length) return;
+  if (!state.aiConfig || !state.aiConfig.configured) return;
+  if (state.aiWatchBusy) return;
+  if (state.aiWatchRetryAt && Date.now() < state.aiWatchRetryAt) return;
+  const intervalMs = (Number(s.intervalMin) || 15) * 60000;
+  if (state.aiWatchAt && Date.now() - state.aiWatchAt < intervalMs) return;
+  runAiWatch(false);
+}
+
+function scheduleAiWatch() {
+  if (state.aiWatchTimer) clearInterval(state.aiWatchTimer);
+  state.aiWatchTimer = setInterval(maybeRunAiWatch, 60000);
 }
 
 /* ==================================================================
@@ -622,6 +1420,10 @@ async function syncAccountData(promptImport) {
       'ok'
     );
   }
+  pruneAiWatch();
+  await loadAlertSettings();
+  await loadNotifications();
+  scheduleAiWatch();
   await loadAiConfig();
 }
 
@@ -703,6 +1505,10 @@ async function logoutAccount() {
   });
   if (state.favOnly) applyFilter();
   await loadAiConfig();
+  pruneAiWatch();
+  await loadAlertSettings();
+  await loadNotifications();
+  scheduleAiWatch();
   updateAccountState();
   closeAccountModal();
 }
@@ -1057,6 +1863,8 @@ async function loadOverview() {
     renderTrends();
     renderGold(); // guncel altin fiyati
     renderAssets(); // varlik penceresi aciksa guncel fiyatlarla tazele
+    evaluatePriceAlerts();
+    maybeRunAiWatch();
     statusEl.innerHTML =
       '<span class="ok">● Canli</span> · Guncelleme: ' +
       new Date(state.updatedAt).toLocaleTimeString('tr-TR');
@@ -3106,6 +3914,9 @@ async function init() {
   // Hesap oturumunu ve AI ayar durumunu kontrol et
   await loadAuth();
   await loadAiConfig();
+  loadAiWatchCache();
+  await loadAlertSettings();
+  await loadNotifications();
   if (state.user) {
     try {
       await syncAccountData(false);
@@ -3199,6 +4010,18 @@ async function init() {
   document.getElementById('accountImportBtn').addEventListener('click', importLocalAssets);
   document.getElementById('accountImportYes').addEventListener('click', () => resolveAccountImportPrompt(true));
   document.getElementById('accountImportNo').addEventListener('click', () => resolveAccountImportPrompt(false));
+
+  // Takip / bildirimler
+  document.getElementById('notifyBtn').addEventListener('click', openNotifyModal);
+  document.getElementById('notifyClose').addEventListener('click', closeNotifyModal);
+  document.getElementById('notifyModal').addEventListener('click', (e) => {
+    if (e.target.id === 'notifyModal') closeNotifyModal();
+  });
+  document.getElementById('notifySettingsBtn').addEventListener('click', toggleNotifySettings);
+  document.getElementById('notifyReadBtn').addEventListener('click', markAllNotificationsRead);
+  document.getElementById('notifyClearBtn').addEventListener('click', clearNotifications);
+  document.getElementById('notifySaveBtn').addEventListener('click', saveAlertSettingsFromUI);
+  document.getElementById('notifyCheckBtn').addEventListener('click', () => runAiWatch(true));
 
   // AI Analiz butonu
   document.getElementById('aiBtn').addEventListener('click', openAIModal);
@@ -3314,6 +4137,7 @@ async function init() {
       closeAIModal();
       closeAiConfigModal();
       closeAccountModal();
+      closeNotifyModal();
     }
   });
 
@@ -3325,11 +4149,18 @@ async function init() {
   // Anlik guncelleme: her 60 saniyede bir fiyatlari yenile
   setInterval(() => {
     loadOverview();
+    if (state.user) loadNotifications();
     document.getElementById('autoRefreshInfo').textContent =
       'Otomatik yenileme: 60 sn';
   }, 60 * 1000);
   document.getElementById('autoRefreshInfo').textContent =
     'Otomatik yenileme: 60 sn';
+
+  // Takip motoru: fiyat uyarilari loadOverview icinde, AI kontrolu ayri zamanlayici
+  scheduleAiWatch();
+  refreshNotifyBadge();
+  renderNotifications();
+  updateAiWatchStatus();
 }
 
 document.addEventListener('DOMContentLoaded', init);

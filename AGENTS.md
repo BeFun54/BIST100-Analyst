@@ -50,7 +50,7 @@ stdlib (`server.py`, fallback). Hic npm bagimliligi yoktur.
 - `lib/ai.js` — AI istemcisi: saglayici algilama, EVREN terms akisi, per-request
   anahtar, model listesi, formasyon dogrulama, haber destekli promptlar.
 - `lib/db.js` — SQLite hesap katmani (node:sqlite): kullanici, oturum, varlik,
-  favori, sifreli AI anahtari.
+  favori, bildirim, kullanici ayari, sifreli AI anahtari.
 - `lib/auth.js` — sifre hash (scrypt), oturum cerezi, CSRF/hiz siniri yardimlari,
   AES-256-GCM sifreleme.
 - `lib/patterns.js` — v2 formasyon motoru: trend/geometri/ kirilim tazeligi
@@ -63,9 +63,10 @@ stdlib (`server.py`, fallback). Hic npm bagimliligi yoktur.
 - `public/index.html` — Arayuz; `styles.css` temel tema, `glass.css`
   Glassmorphism katmani (yerlesimi degistirmez).
 - `public/app.js` — Istemci: liste/grafik/haber/portfoy, tarayici bazli API
-  anahtari, AI pencereleri, grafikten varlik ekleme, hesap/senkron.
+  anahtari, AI pencereleri, grafikten varlik ekleme, hesap/senkron, takip
+  bildirimleri ve AI portfoy kontrolu.
 - `public/manifest.webmanifest`, `public/sw.js`, `public/icons/` — PWA.
-  Service worker cache adi (`bist100-analist-v2-2`) degisince artirilmalidir.
+  Service worker cache adi (`bist100-analist-v2-4`) degisince artirilmalidir.
 
 ## API rotalari (sunucu calisirken)
 - `GET /api/overview` — Tum BIST100 ozet (60 sn)
@@ -80,8 +81,13 @@ stdlib (`server.py`, fallback). Hic npm bagimliligi yoktur.
 - `PUT/DELETE /api/auth/ai-key` — Hesapta AES-256-GCM sifreli AI anahtari
 - `GET/POST /api/assets`, `POST /api/assets/import`, `DELETE /api/assets/:id`
 - `GET/POST /api/favorites`
+- `GET/POST/DELETE /api/notifications`, `POST /api/notifications/read` —
+  Kullanici bazli takip bildirimleri
+- `GET/PUT /api/notification-settings` — Takip/AI kontrol ayarlari
 - `GET /api/ai-analysis` — Piyasa analizi (10 dk, anahtar bazli)
 - `GET /api/ai-analysis-stock?symbol=X&horizon=all|short|long` — Hisse analizi
+- `POST /api/ai-portfolio-watch` — Portfoy zirve/dusus riski, JSON sinyaller
+  (4 dk; anahtar + portfoy imzasina gore onbellek)
 - `GET /api/ai-models` — Hesaba tanimli modeller (`/v1/models`)
 - `GET /api/ai-config` — Sunucu varsayilan ayar durumu (anahtar gizli)
 - `POST /api/ai-test` — Baglanti testi (anahtar basliklardan veya govdeden)
@@ -93,6 +99,14 @@ stdlib (`server.py`, fallback). Hic npm bagimliligi yoktur.
   arayuz kural tabanli formasyon sonuclarini koruyup anahtar penceresini acar.
 - AI yanitlari anahtar + base + model imzasina gore onbelleklenir; farkli
   kullanicilarin sonuclari karismaz. `fresh=1` onbellegi atlar.
+- Portfoy izleme onbellegi ayrica varlik (sembol/adet/alis/hedef) imzasini
+  icerir; boylece bir kullanicinin portfoyu digerine sizmaz.
+- Takip bildirimleri: hedefe yaklasma (varsayilan %90), hedefe ulasma, gunluk
+  sert dusus (varsayilan -%5) ve AI risk sinyali. `dedupe_key` ile ayni uyari
+  tekrar eklenmez; hesapta bildirimler/ayarlar cihazlar arasi senkron.
+- AI portfoy kontrolu istemci zamanlayicisiyla calisir (varsayilan 15 dk,
+  ayarlanabilir 5-60 dk) ve yalnizca uygulama acikken calisir. AI anahtari yoksa
+  sessizce atlanir; manuel kontrolde anahtar penceresi uyarisi verilir.
 - Grafikten varlik ekleme formu `buildChartAddForm` ile ana listede ve buyutme
   modalinda aynidir; alis fiyati guncel fiyatla on dolar.
 - Tema `public/glass.css` icinde; yeni bilesen eklerken once buradaki cam

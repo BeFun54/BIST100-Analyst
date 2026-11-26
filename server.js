@@ -253,6 +253,25 @@ function aiKeyRequired(res) {
   });
 }
 
+/* Bildirim ayarlarini guvenli araliga indirger. */
+const NOTIFICATION_TYPES = ['near_target', 'target_reached', 'sharp_drop', 'ai_risk', 'info'];
+
+function sanitizeAlertSettings(input) {
+  const s = input && typeof input === 'object' ? input : {};
+  const pick = (v, allowed, fallback) => {
+    const n = Number(v);
+    return allowed.includes(n) ? n : fallback;
+  };
+  return {
+    enabled: s.enabled !== false,
+    aiEnabled: s.aiEnabled !== false,
+    intervalMin: pick(s.intervalMin, [5, 10, 15, 30, 60], 15),
+    nearPct: pick(s.nearPct, [80, 85, 90, 95], 90),
+    sharpDropPct: pick(s.sharpDropPct, [0, 3, 5, 8], 5),
+    aiRiskLevel: s.aiRiskLevel === 'medium' ? 'medium' : 'high'
+  };
+}
+
 /* ------------------------------------------------------------------ *
  *  API : /api/overview
  * ------------------------------------------------------------------ */
@@ -1151,6 +1170,140 @@ async function handleApi(req, res, urlObj) {
     return sendJson(res, 405, { error: 'Yontem desteklemiyor' });
   }
 
+  /* --------------------------- bildirimler -------------------------- */
+
+  if (p === '/api/notifications') {
+    if (!accountsAvailable(res)) return;
+    const user = requireUser(req, res);
+    if (!user) return;
+    if (req.method === 'GET') {
+      try {
+        return sendJson(res, 200, {
+          items: db.listNotifications(user.id, 100),
+          unread: db.countUnreadNotifications(user.id)
+        });
+      } catch (e) {
+        return sendJson(res, 500, {
+          error: 'Bildirimler alinamadi',
+          detail: String((e && e.message) || e)
+        });
+      }
+    }
+    if (req.method === 'POST') {
+      let body;
+      try {
+        body = await readBody(req);
+      } catch (e) {
+        return sendJson(res, 400, { error: String(e.message || 'Gecersiz istek') });
+      }
+      const title = String(body.title || '').trim();
+      if (!title) return sendJson(res, 400, { error: 'Bildirim basligi gerekli.' });
+      const type = String(body.type || 'info');
+      if (!NOTIFICATION_TYPES.includes(type)) {
+        return sendJson(res, 400, { error: 'Gecersiz bildirim turu.' });
+      }
+      try {
+        const result = db.insertNotification(user.id, {
+          symbol: body.symbol,
+          type,
+          severity: body.severity,
+          title,
+          body: body.body,
+          dedupeKey: body.dedupeKey,
+          createdAt: body.createdAt
+        });
+        return sendJson(res, result.created ? 201 : 200, {
+          created: result.created,
+          notification: result.notification,
+          unread: db.countUnreadNotifications(user.id)
+        });
+      } catch (e) {
+        return sendJson(res, 500, {
+          error: 'Bildirim kaydedilemedi',
+          detail: String((e && e.message) || e)
+        });
+      }
+    }
+    if (req.method === 'DELETE') {
+      try {
+        db.clearNotifications(user.id);
+        return sendJson(res, 200, { ok: true, items: [], unread: 0 });
+      } catch (e) {
+        return sendJson(res, 500, {
+          error: 'Bildirimler temizlenemedi',
+          detail: String((e && e.message) || e)
+        });
+      }
+    }
+    return sendJson(res, 405, { error: 'Yontem desteklemiyor' });
+  }
+
+  if (p === '/api/notifications/read') {
+    if (req.method !== 'POST') {
+      return sendJson(res, 405, { error: 'Yontem desteklemiyor' });
+    }
+    if (!accountsAvailable(res)) return;
+    const user = requireUser(req, res);
+    if (!user) return;
+    let body = {};
+    try {
+      body = await readBody(req);
+    } catch (_) {
+      body = {};
+    }
+    try {
+      const unread = db.markNotificationsRead(
+        user.id,
+        Array.isArray(body.ids) ? body.ids : null
+      );
+      return sendJson(res, 200, {
+        ok: true,
+        unread,
+        items: db.listNotifications(user.id, 100)
+      });
+    } catch (e) {
+      return sendJson(res, 500, {
+        error: 'Bildirimler guncellenemedi',
+        detail: String((e && e.message) || e)
+      });
+    }
+  }
+
+  if (p === '/api/notification-settings') {
+    if (!accountsAvailable(res)) return;
+    const user = requireUser(req, res);
+    if (!user) return;
+    if (req.method === 'GET') {
+      try {
+        return sendJson(res, 200, { settings: db.getUserSettings(user.id) });
+      } catch (e) {
+        return sendJson(res, 500, {
+          error: 'Ayarlar alinamadi',
+          detail: String((e && e.message) || e)
+        });
+      }
+    }
+    if (req.method === 'PUT') {
+      let body;
+      try {
+        body = await readBody(req);
+      } catch (e) {
+        return sendJson(res, 400, { error: String(e.message || 'Gecersiz istek') });
+      }
+      try {
+        const settings = sanitizeAlertSettings(body.settings || body);
+        db.saveUserSettings(user.id, settings);
+        return sendJson(res, 200, { ok: true, settings });
+      } catch (e) {
+        return sendJson(res, 500, {
+          error: 'Ayarlar kaydedilemedi',
+          detail: String((e && e.message) || e)
+        });
+      }
+    }
+    return sendJson(res, 405, { error: 'Yontem desteklemiyor' });
+  }
+
   if (p === '/api/overview') {
     const data = await getOverviewCached();
     return sendJson(res, 200, data);
@@ -1432,6 +1585,173 @@ async function handleApi(req, res, urlObj) {
       } catch (e) {
         return sendJson(res, 502, {
           error: 'AI hisse analizi alinamadi',
+          detail: String((e && e.message) || e)
+        });
+      }
+    }
+    return sendJson(res, 200, data);
+  }
+
+  /* ---------------------- AI portfoy risk izleme -------------------- */
+
+  if (p === '/api/ai-portfolio-watch') {
+    if (req.method !== 'POST') {
+      return sendJson(res, 405, { error: 'Yontem desteklemiyor' });
+    }
+    let body;
+    try {
+      body = await readBody(req);
+    } catch (e) {
+      return sendJson(res, 400, { error: String(e.message || 'Gecersiz istek') });
+    }
+    const rawItems = Array.isArray(body.items) ? body.items : [];
+    if (!rawItems.length) {
+      return sendJson(res, 400, { error: 'items dizisi gerekli.' });
+    }
+    if (rawItems.length > 12) {
+      return sendJson(res, 400, { error: 'Tek seferde en fazla 12 hisse izlenebilir.' });
+    }
+
+    const overrides = readAiOverrides(req, body);
+    if (!hasAiKey(overrides)) return aiKeyRequired(res);
+
+    const items = [];
+    const seen = new Set();
+    for (const it of rawItems) {
+      const symbol = String(it.symbol || '').toUpperCase().trim();
+      const stock = bySymbol[symbol];
+      if (!stock || seen.has(symbol)) continue;
+      seen.add(symbol);
+      items.push({
+        symbol,
+        name: stock.name,
+        qty: Number(it.qty) || 0,
+        buyPrice: Number(it.buyPrice) || 0,
+        target: isFinite(Number(it.target)) && Number(it.target) > 0 ? Number(it.target) : null,
+        patternName: it.patternName ? String(it.patternName).slice(0, 80) : null
+      });
+    }
+    if (!items.length) {
+      return sendJson(res, 400, { error: 'Gecerli sembol bulunamadi.' });
+    }
+
+    const fresh = body.fresh === true;
+    const sig = ai.configSignature(overrides);
+    // Kullaniciya ozel alis/hedef bilgisi onbellege sizmasin.
+    const itemsSig = crypto
+      .createHash('sha256')
+      .update(JSON.stringify(items))
+      .digest('hex')
+      .slice(0, 16);
+    const key = 'ai:portfolio:' + sig + ':' + itemsSig;
+    let data = fresh ? undefined : cacheGet(key);
+    if (!data) {
+      try {
+        const overview = await getOverviewCached().catch(() => ({ items: [] }));
+        const ovMap = new Map(((overview && overview.items) || []).map((x) => [x.symbol, x]));
+
+        const enriched = await Promise.all(
+          items.map(async (it) => {
+            const stock = bySymbol[it.symbol];
+            const ov = ovMap.get(it.symbol) || {};
+            let chart = null;
+            try {
+              chart = await dedupe('chart:' + it.symbol + ':3mo', () =>
+                yahoo
+                  .getChart(stock.yahoo, '3mo')
+                  .then((v) => cacheSet('chart:' + it.symbol + ':3mo', v, 5 * 60 * 1000))
+              );
+            } catch (_) {
+              chart = null;
+            }
+            const candles = (chart && chart.candles) || [];
+            const closes = candles
+              .map((c) => c.c)
+              .filter((v) => v != null && isFinite(v));
+            const ind = computeIndicators(candles) || {};
+            const current =
+              ov.price != null ? ov.price : closes.length ? closes[closes.length - 1] : null;
+            let stockNews = [];
+            try {
+              stockNews = await dedupe('news:watch:' + it.symbol, () =>
+                news
+                  .getNews('"' + stock.name + '" OR ' + it.symbol, { days: 7, limit: 3 })
+                  .then((v) => cacheSet('news:watch:' + it.symbol, v, 10 * 60 * 1000))
+              );
+            } catch (_) {
+              stockNews = [];
+            }
+            return {
+              symbol: it.symbol,
+              name: ov.name || it.name,
+              price: round(current, 2),
+              qty: it.qty,
+              buyPrice: it.buyPrice,
+              target: it.target,
+              patternName: it.patternName,
+              changePercent: ov.changePercent != null ? ov.changePercent : null,
+              weekChangePercent: ov.weekChangePercent != null ? ov.weekChangePercent : null,
+              monthChangePercent: ov.monthChangePercent != null ? ov.monthChangePercent : null,
+              rsi14: ind.rsi14 != null ? round(ind.rsi14, 1) : null,
+              ma20: closes.length >= 20 ? round(avg(closes.slice(-20)), 2) : null,
+              ma50: closes.length >= 50 ? round(avg(closes.slice(-50)), 2) : null,
+              high60: closes.length
+                ? round(Math.max.apply(null, closes.slice(-60)), 2)
+                : null,
+              low60: closes.length
+                ? round(Math.min.apply(null, closes.slice(-60)), 2)
+                : null,
+              closes: closes.slice(-10).map((c) => round(c, 2)),
+              news: (stockNews || []).slice(0, 3).map((n) => ({
+                title: n.title,
+                source: n.source
+              }))
+            };
+          })
+        );
+
+        const rawSignals = await ai.analyzePortfolio({ items: enriched }, overrides);
+        const bySym = new Map();
+        for (const s of rawSignals || []) {
+          const sym = String(s.symbol || '').toUpperCase().trim();
+          const base = enriched.find((e) => e.symbol === sym);
+          if (!base) continue;
+          const price = base.price;
+          let aiTarget = Number(s.aiTarget);
+          if (!isFinite(aiTarget) || aiTarget <= 0) aiTarget = null;
+          if (aiTarget != null && price != null) {
+            aiTarget = Math.min(Math.max(aiTarget, price * 0.85), price * 1.6);
+          }
+          let confidence = Number(s.confidence);
+          confidence = isFinite(confidence)
+            ? Math.max(0, Math.min(100, Math.round(confidence)))
+            : 50;
+          bySym.set(sym, {
+            symbol: sym,
+            price: price == null ? null : round(price, 2),
+            aiTarget: aiTarget == null ? null : round(aiTarget, 2),
+            risk: ['low', 'medium', 'high'].includes(String(s.risk)) ? String(s.risk) : 'medium',
+            action: ['hold', 'watch', 'take_profit', 'reduce'].includes(String(s.action))
+              ? String(s.action)
+              : 'hold',
+            confidence,
+            reason: String(s.reason || '').slice(0, 240),
+            updatedAt: Date.now()
+          });
+        }
+
+        const cfg = ai.resolveConfig(overrides);
+        data = {
+          updatedAt: Date.now(),
+          provider: cfg.provider,
+          model: cfg.model,
+          signals: [...bySym.values()],
+          missing: enriched.filter((e) => !bySym.has(e.symbol)).map((e) => e.symbol)
+        };
+        cacheSet(key, data, 4 * 60 * 1000);
+      } catch (e) {
+        return sendJson(res, 502, {
+          error: 'AI portfoy analizi alinamadi',
           detail: String((e && e.message) || e)
         });
       }

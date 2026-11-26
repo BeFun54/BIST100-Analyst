@@ -45,6 +45,10 @@
       <button id="accountBtn" class="btn btn-account" title="Hesap">
         👤 <span id="accountLabel">Giriş</span>
       </button>
+      <button id="notifyBtn" class="btn btn-notify" title="Takip ve bildirimler">
+        🔔 <span id="notifyLabel">Takip</span>
+        <span id="notifyBadge" class="badge notify-badge" hidden>0</span>
+      </button>
       <button id="refreshBtn" class="btn" title="Verileri yenile">⟳</button>
     </div>
   </header>
@@ -329,6 +333,85 @@
       </div>
     </div>
   </div>
+
+  <!-- Bildirimler / akilli portfoy takibi -->
+  <div id="notifyModal" class="modal hidden">
+    <div class="modal-box notify-box">
+      <div class="modal-head">
+        <div>
+          <h3>🔔 Takip &amp; Bildirimler</h3>
+          <span id="notifySub" class="muted">Varlıklarınız hedefe yaklaşınca ve AI risk gördüğünde uyarır</span>
+        </div>
+        <div class="notify-head-actions">
+          <button id="notifySettingsBtn" class="btn" title="Takip ayarları">⚙️</button>
+          <button id="notifyClose" class="btn" title="Kapat">✕</button>
+        </div>
+      </div>
+
+      <div id="notifyList" class="notify-list"></div>
+
+      <div class="notify-footer">
+        <button id="notifyReadBtn" class="btn" type="button">Tümünü okundu işaretle</button>
+        <button id="notifyClearBtn" class="btn" type="button">Temizle</button>
+      </div>
+
+      <div id="notifySettings" class="notify-settings" style="display:none;">
+        <div class="notify-settings-head">
+          <b>Takip Ayarları</b>
+          <span class="muted">AI kontrolü ve uyarı eşikleri</span>
+        </div>
+        <label class="notify-check">
+          <input id="notifyEnabled" type="checkbox" /> Takip ve bildirimler aktif
+        </label>
+        <label class="notify-check">
+          <input id="notifyAiEnabled" type="checkbox" /> AI düşüş riski kontrolü
+        </label>
+        <label class="notify-field">AI kontrol sıklığı
+          <select id="notifyInterval">
+            <option value="5">5 dakika</option>
+            <option value="10">10 dakika</option>
+            <option value="15">15 dakika</option>
+            <option value="30">30 dakika</option>
+            <option value="60">60 dakika</option>
+          </select>
+        </label>
+        <label class="notify-field">Hedefe yaklaşma eşiği
+          <select id="notifyNear">
+            <option value="80">Hedefin %80'i</option>
+            <option value="85">Hedefin %85'i</option>
+            <option value="90">Hedefin %90'ı</option>
+            <option value="95">Hedefin %95'i</option>
+          </select>
+        </label>
+        <label class="notify-field">Sert düşüş uyarısı
+          <select id="notifyDrop">
+            <option value="0">Kapalı</option>
+            <option value="3">Günlük -%3</option>
+            <option value="5">Günlük -%5</option>
+            <option value="8">Günlük -%8</option>
+          </select>
+        </label>
+        <label class="notify-field">AI risk eşiği
+          <select id="notifyRisk">
+            <option value="high">Yalnızca yüksek risk</option>
+            <option value="medium">Orta ve yüksek risk</option>
+          </select>
+        </label>
+        <div class="notify-actions">
+          <button id="notifySaveBtn" class="btn btn-ai" type="button">Ayarları kaydet</button>
+          <button id="notifyCheckBtn" class="btn" type="button">Şimdi AI kontrolü yap</button>
+        </div>
+        <div id="notifyStatus" class="notify-status"></div>
+        <div id="notifySettingsMessage" class="ai-config-message" style="display:none;"></div>
+        <div class="notify-hint">
+          Uyarılar bilgilendirme amaçlıdır; yatırım tavsiyesi değildir. AI kontrolü
+          API kotanızdan kullanır.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toastWrap" class="toast-wrap"></div>
 
   <!-- Varliklarim (modal) -->
   <div id="assetsModal" class="modal hidden">
